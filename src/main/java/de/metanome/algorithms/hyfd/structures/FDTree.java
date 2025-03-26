@@ -10,7 +10,9 @@ import de.metanome.algorithm_integration.ColumnIdentifier;
 import de.metanome.algorithm_integration.result_receiver.ColumnNameMismatchException;
 import de.metanome.algorithm_integration.result_receiver.CouldNotReceiveResultException;
 import de.metanome.algorithm_integration.result_receiver.FunctionalDependencyResultReceiver;
+import de.metanome.algorithm_integration.result_receiver.RelaxedFunctionalDependencyResultReceiver;
 import de.metanome.algorithm_integration.results.FunctionalDependency;
+import de.metanome.algorithm_integration.results.RelaxedFunctionalDependency;
 import de.uni_potsdam.hpi.utils.FileUtils;
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
@@ -705,13 +707,13 @@ System.out.print("(G); ");
 	}
 */	
 	
-	public List<FunctionalDependency> getFunctionalDependencies(ObjectArrayList<ColumnIdentifier> columnIdentifiers, List<PositionListIndex> plis) {
-		List<FunctionalDependency> functionalDependencies = new ArrayList<FunctionalDependency>();
+	public List<RelaxedFunctionalDependency> getFunctionalDependencies(ObjectArrayList<ColumnIdentifier> columnIdentifiers, List<PositionListIndex> plis) {
+		List<RelaxedFunctionalDependency> functionalDependencies = new ArrayList<RelaxedFunctionalDependency>();
 		this.addFunctionalDependenciesInto(functionalDependencies, new BitSet(), columnIdentifiers, plis);
 		return functionalDependencies;
 	}
 	
-	public int addFunctionalDependenciesInto(FunctionalDependencyResultReceiver resultReceiver, ObjectArrayList<ColumnIdentifier> columnIdentifiers, List<PositionListIndex> plis) throws CouldNotReceiveResultException, ColumnNameMismatchException {
+	public int addFunctionalDependenciesInto(RelaxedFunctionalDependencyResultReceiver resultReceiver, ObjectArrayList<ColumnIdentifier> columnIdentifiers, List<PositionListIndex> plis) throws CouldNotReceiveResultException, ColumnNameMismatchException {
 		return this.addFunctionalDependenciesInto(resultReceiver, new BitSet(), columnIdentifiers, plis);
 	}
 

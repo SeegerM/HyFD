@@ -1,12 +1,6 @@
 package de.metanome.algorithms.hyfd;
 
-import java.util.ArrayList;
-import java.util.BitSet;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.Iterator;
-import java.util.List;
-import java.util.PriorityQueue;
+import java.util.*;
 
 import de.metanome.algorithms.hyfd.structures.FDList;
 import de.metanome.algorithms.hyfd.structures.FDSet;
@@ -15,6 +9,7 @@ import de.metanome.algorithms.hyfd.structures.IntegerPair;
 import de.metanome.algorithms.hyfd.structures.PositionListIndex;
 import de.metanome.algorithms.hyfd.utils.Logger;
 import de.metanome.algorithms.hyfd.utils.ValueComparator;
+import it.unimi.dsi.fastutil.ints.Int2IntArrayMap;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 
 public class Sampler {
@@ -28,8 +23,11 @@ public class Sampler {
 	private List<AttributeRepresentant> attributeRepresentants = null;
 	private PriorityQueue<AttributeRepresentant> queue = null;
 	private MemoryGuardian memoryGuardian;
+	private int maxViolations;
 
-	public Sampler(FDSet negCover, FDTree posCover, int[][] compressedRecords, List<PositionListIndex> plis, float efficiencyThreshold, ValueComparator valueComparator, MemoryGuardian memoryGuardian) {
+	private Map<BitSet, Integer> violationCounts2 = new HashMap<>();
+
+	public Sampler(FDSet negCover, FDTree posCover, int maxViolations, int[][] compressedRecords, List<PositionListIndex> plis, float efficiencyThreshold, ValueComparator valueComparator, MemoryGuardian memoryGuardian) {
 		this.negCover = negCover;
 		this.posCover = posCover;
 		this.compressedRecords = compressedRecords;
@@ -37,6 +35,7 @@ public class Sampler {
 		this.efficiencyThreshold = efficiencyThreshold;
 		this.valueComparator = valueComparator;
 		this.memoryGuardian = memoryGuardian;
+		this.maxViolations = maxViolations;
 	}
 
 	public FDList enrichNegativeCover(List<IntegerPair> comparisonSuggestions) {
@@ -45,16 +44,30 @@ public class Sampler {
 		Logger.getInstance().writeln("Investigating comparison suggestions ... ");
 		FDList newNonFds = new FDList(numAttributes, this.negCover.getMaxDepth());
 		BitSet equalAttrs = new BitSet(this.posCover.getNumAttributes());
+		Int2IntArrayMap violationCountMap = new Int2IntArrayMap();
+		BitSet[] attributeViolations = new BitSet[numAttributes];
+		for (int i = 0; i < numAttributes; i++) {
+			attributeViolations[i] = new BitSet();
+		}
+
 		for (IntegerPair comparisonSuggestion : comparisonSuggestions) {
-			this.match(equalAttrs, comparisonSuggestion.a(), comparisonSuggestion.b());
-			
-			if (!this.negCover.contains(equalAttrs)) {
-				BitSet equalAttrsCopy = (BitSet) equalAttrs.clone();
-				this.negCover.add(equalAttrsCopy);
-				newNonFds.add(equalAttrsCopy);
-				
-				this.memoryGuardian.memoryChanged(1);
-				this.memoryGuardian.match(this.negCover, this.posCover, newNonFds);
+			// Update equalAttrs and per-attribute violation data.
+			this.match(equalAttrs, comparisonSuggestion.a(), comparisonSuggestion.b(), violationCountMap, attributeViolations);
+			// For suggestions, you might want to decide later how to use the per-attribute data.
+			// (Here you could defer addition until after processing all suggestions.)
+		}
+
+		// Example: Process the accumulated violation data from suggestions.
+		for (int i = 0; i < numAttributes; i++) {
+			if (violationCountMap.get(i) >= this.maxViolations) {
+				BitSet vioCandidate = attributeViolations[i];
+				if (!this.negCover.contains(vioCandidate)) {
+					BitSet candidateCopy = (BitSet) vioCandidate.clone();
+					this.negCover.add(candidateCopy);
+					newNonFds.add(candidateCopy);
+					this.memoryGuardian.memoryChanged(1);
+					this.memoryGuardian.match(this.negCover, this.posCover, newNonFds);
+				}
 			}
 		}
 		
@@ -179,6 +192,8 @@ public class Sampler {
 		private FDTree posCover;
 		private Sampler sampler;
 		private MemoryGuardian memoryGuardian;
+
+		private Map<BitSet, Integer> violationCounts = new HashMap<>();
 		
 		public float getEfficiency() {
 			int index = this.numNewNonFds.size() - 1;
@@ -217,10 +232,17 @@ public class Sampler {
 			this.windowDistance++;
 			int numNewNonFds = 0;
 			int numComparisons = 0;
-			BitSet equalAttrs = new BitSet(this.posCover.getNumAttributes());
+			int numAttributes = this.posCover.getNumAttributes();
+			BitSet equalAttrs = new BitSet(numAttributes);
 			
 			int previousNegCoverSize = newNonFds.size();
 			Iterator<IntArrayList> clusterIterator = this.clusters.iterator();
+			Int2IntArrayMap violationCountMap = new Int2IntArrayMap();
+			BitSet[] attributeViolations = new BitSet[numAttributes];
+			for (int i = 0; i < numAttributes; i++) {
+				attributeViolations[i] = new BitSet();
+			}
+
 			while (clusterIterator.hasNext()) {
 				IntArrayList cluster = clusterIterator.next();
 				
@@ -228,22 +250,38 @@ public class Sampler {
 					clusterIterator.remove();
 					continue;
 				}
-				
+
 				for (int recordIndex = 0; recordIndex < (cluster.size() - this.windowDistance); recordIndex++) {
 					int recordId = cluster.getInt(recordIndex);
 					int partnerRecordId = cluster.getInt(recordIndex + this.windowDistance);
 					
-					this.sampler.match(equalAttrs, compressedRecords[recordId], compressedRecords[partnerRecordId]);
-					
-					if (!this.negCover.contains(equalAttrs)) {
+					this.sampler.match(equalAttrs, compressedRecords[recordId], compressedRecords[partnerRecordId], violationCountMap , attributeViolations);
+
+					/*if (!this.negCover.contains(equalAttrs)) {
 						BitSet equalAttrsCopy = (BitSet) equalAttrs.clone();
 						this.negCover.add(equalAttrsCopy);
 						newNonFds.add(equalAttrsCopy);
-						
+
 						this.memoryGuardian.memoryChanged(1);
 						this.memoryGuardian.match(this.negCover, this.posCover, newNonFds);
 					}
+
+					 */
+					// Record the violation (increment count and add candidate to negCover only if count exceeds maxViolations)
+					//this.recordViolation(equalAttrs, newNonFds);
+
 					numComparisons++;
+				}
+			}
+			for (int i = 0; i < numAttributes; i++) {
+				if (violationCountMap.get(i) > this.sampler.maxViolations){
+					if (attributeViolations[i] != null && !this.negCover.contains(attributeViolations[i])) {
+						BitSet candidateCopy = (BitSet) attributeViolations[i].clone();
+						this.negCover.add(candidateCopy);
+						newNonFds.add(candidateCopy);
+						this.memoryGuardian.memoryChanged(1);
+						this.memoryGuardian.match(this.negCover, this.posCover, newNonFds);
+					}
 				}
 			}
 			numNewNonFds = newNonFds.size() - previousNegCoverSize;
@@ -251,16 +289,75 @@ public class Sampler {
 			this.numNewNonFds.add(numNewNonFds);
 			this.numComparisons.add(numComparisons);
 		}
+
+		/**
+		 * Records a violation for the candidate FD (represented by candidate).
+		 * Only if the candidate has been violated more than maxViolations will it be added to the negative cover.
+		 */
+		private void recordViolation(BitSet candidate, FDList newNonFds) {
+			// Clone the candidate to be used as a key (BitSet equality/hashCode is content-based)
+			//BitSet key = (BitSet) candidate.clone();
+			// If this candidate is already in the negative cover, we do nothing.
+			if (this.negCover.contains(candidate))
+				return;
+			int count = this.violationCounts.getOrDefault(candidate, 0);
+			count++;
+			this.violationCounts.put(candidate, count);
+			// Only add the candidate to the negative cover if the violation count exceeds maxViolations.
+			if (count > this.sampler.maxViolations) {
+				BitSet keyCopy = (BitSet) candidate.clone();
+				this.negCover.add(keyCopy);
+				newNonFds.add(keyCopy);
+				this.memoryGuardian.memoryChanged(1);
+				this.memoryGuardian.match(this.negCover, this.posCover, newNonFds);
+			}
+		}
 	}
 	
-	private void match(BitSet equalAttrs, int t1, int t2) {
-		this.match(equalAttrs, this.compressedRecords[t1], this.compressedRecords[t2]);
+	private void match(BitSet equalAttrs, int t1, int t2, Int2IntArrayMap map, BitSet[] violations) {
+		this.match(equalAttrs, this.compressedRecords[t1], this.compressedRecords[t2], map, violations);
 	}
 	
-	private void match(BitSet equalAttrs, int[] t1, int[] t2) {
+	private void match(BitSet equalAttrs, int[] t1, int[] t2, Int2IntArrayMap violationCountMap, BitSet[] violations) {
 		equalAttrs.clear(0, t1.length);
-		for (int i = 0; i < t1.length; i++)
-			if (this.valueComparator.isEqual(t1[i], t2[i]))
+		int n = t1.length;
+
+		// First, compute equalAttrs: set bits for attributes where t1 and t2 are equal.
+		for (int i = 0; i < n; i++) {
+			if (this.valueComparator.isEqual(t1[i], t2[i])) {
 				equalAttrs.set(i);
+			}
+		}
+
+		// Then, for each attribute where t1 and t2 differ,
+		// increment its violation count and accumulate the candidate FD (equalAttrs)
+		// into the corresponding violation BitSet.
+		for (int i = 0; i < n; i++) {
+			if (!this.valueComparator.isEqual(t1[i], t2[i])) {
+				int currentCount = violationCountMap.get(i);
+				violationCountMap.put(i, currentCount + 1);
+				// Accumulate the candidate FD for attribute i by OR-ing the complete equalAttrs.
+				violations[i].or(equalAttrs);
+			}
+		}
+	}
+
+	private void recordViolation(BitSet candidate, FDList newNonFds) {
+		// Clone the candidate to be used as a key (BitSet equality/hashCode is content-based)
+		//BitSet key = (BitSet) candidate.clone();
+		// If this candidate is already in the negative cover, we do nothing.
+		if (this.negCover.contains(candidate))
+			return;
+		int count = violationCounts2.getOrDefault(candidate, 0);
+		count++;
+		violationCounts2.put(candidate, count);
+		// Only add the candidate to the negative cover if the violation count exceeds maxViolations.
+		if (count > this.maxViolations) {
+			BitSet keyCopy = (BitSet) candidate.clone();
+			this.negCover.add(keyCopy);
+			newNonFds.add(keyCopy);
+			this.memoryGuardian.memoryChanged(1);
+			this.memoryGuardian.match(this.negCover, this.posCover, newNonFds);
+		}
 	}
 }

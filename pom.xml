@@ -42,13 +42,13 @@
     <dependency>
       <groupId>de.metanome</groupId>
       <artifactId>algorithm_integration</artifactId>
-      <version>1.1-SNAPSHOT</version>
+      <version>${metanome.version}</version>
     </dependency>
 
     <dependency>
       <groupId>de.metanome</groupId>
       <artifactId>backend</artifactId>
-      <version>1.1-SNAPSHOT</version>
+      <version>${metanome.version}</version>
       <scope>test</scope>
     </dependency>
 

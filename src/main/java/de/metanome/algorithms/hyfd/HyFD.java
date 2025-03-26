@@ -10,21 +10,20 @@ import de.metanome.algorithm_integration.AlgorithmConfigurationException;
 import de.metanome.algorithm_integration.AlgorithmExecutionException;
 import de.metanome.algorithm_integration.ColumnCombination;
 import de.metanome.algorithm_integration.ColumnIdentifier;
-import de.metanome.algorithm_integration.algorithm_types.BooleanParameterAlgorithm;
-import de.metanome.algorithm_integration.algorithm_types.FunctionalDependencyAlgorithm;
-import de.metanome.algorithm_integration.algorithm_types.IntegerParameterAlgorithm;
-import de.metanome.algorithm_integration.algorithm_types.RelationalInputParameterAlgorithm;
+import de.metanome.algorithm_integration.algorithm_types.*;
 import de.metanome.algorithm_integration.configuration.ConfigurationRequirement;
 import de.metanome.algorithm_integration.configuration.ConfigurationRequirementBoolean;
 import de.metanome.algorithm_integration.configuration.ConfigurationRequirementInteger;
 import de.metanome.algorithm_integration.configuration.ConfigurationRequirementRelationalInput;
+import de.metanome.algorithm_integration.configuration.ConfigurationRequirementString;
 import de.metanome.algorithm_integration.input.InputGenerationException;
 import de.metanome.algorithm_integration.input.InputIterationException;
 import de.metanome.algorithm_integration.input.RelationalInput;
 import de.metanome.algorithm_integration.input.RelationalInputGenerator;
 import de.metanome.algorithm_integration.result_receiver.FunctionalDependencyResultReceiver;
+import de.metanome.algorithm_integration.result_receiver.RelaxedFunctionalDependencyResultReceiver;
 import de.metanome.algorithm_integration.results.FunctionalDependency;
-import de.metanome.algorithms.hyfd.fdep.FDEP;
+import de.metanome.algorithm_integration.results.RelaxedFunctionalDependency;
 import de.metanome.algorithms.hyfd.structures.FDList;
 import de.metanome.algorithms.hyfd.structures.FDSet;
 import de.metanome.algorithms.hyfd.structures.FDTree;
@@ -37,14 +36,14 @@ import de.uni_potsdam.hpi.utils.CollectionUtils;
 import de.uni_potsdam.hpi.utils.FileUtils;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 
-public class HyFD implements FunctionalDependencyAlgorithm, BooleanParameterAlgorithm, IntegerParameterAlgorithm, RelationalInputParameterAlgorithm {
+public class HyFD implements RelaxedFunctionalDependencyAlgorithm, BooleanParameterAlgorithm, IntegerParameterAlgorithm, StringParameterAlgorithm, RelationalInputParameterAlgorithm {
 
 	public enum Identifier {
-		INPUT_GENERATOR, NULL_EQUALS_NULL, VALIDATE_PARALLEL, ENABLE_MEMORY_GUARDIAN, MAX_DETERMINANT_SIZE, INPUT_ROW_LIMIT
+		INPUT_GENERATOR, THRESHOLD, NULL_EQUALS_NULL, VALIDATE_PARALLEL, ENABLE_MEMORY_GUARDIAN, MAX_DETERMINANT_SIZE, INPUT_ROW_LIMIT
 	};
 
 	private RelationalInputGenerator inputGenerator = null;
-	private FunctionalDependencyResultReceiver resultReceiver = null;
+	private RelaxedFunctionalDependencyResultReceiver resultReceiver = null;
 
 	private ValueComparator valueComparator;
 	private final MemoryGuardian memoryGuardian = new MemoryGuardian(true);
@@ -58,7 +57,9 @@ public class HyFD implements FunctionalDependencyAlgorithm, BooleanParameterAlgo
 	private String tableName;
 	private List<String> attributeNames;
 	private int numAttributes;
-	
+
+	private float threshold = 1.0f;
+
 	@Override
 	public String getAuthors() {
 		return "Thorsten Papenbrock";
@@ -107,12 +108,26 @@ public class HyFD implements FunctionalDependencyAlgorithm, BooleanParameterAlgo
 		inputRowLimit.setDefaultValues(defaultInputRowLimit);
 		inputRowLimit.setRequired(false);
 		configs.add(inputRowLimit);
-		
+
+		ConfigurationRequirementString threshold = new ConfigurationRequirementString(HyFD.Identifier.THRESHOLD.name());
+		String[] defaultThreshold = new String[1];
+		threshold.setDefaultValues(defaultThreshold);
+		threshold.setRequired(false);
+		configs.add(threshold);
+
 		return configs;
 	}
 
 	@Override
-	public void setResultReceiver(FunctionalDependencyResultReceiver resultReceiver) {
+	public void setStringConfigurationValue(String identifier, String... values) throws AlgorithmConfigurationException {
+		if (Identifier.THRESHOLD.name().equals(identifier))
+			this.threshold = Float.parseFloat(values[0]);
+		else
+			this.handleUnknownConfiguration(identifier, CollectionUtils.concat(values, ","));
+	}
+
+	@Override
+	public void setResultReceiver(RelaxedFunctionalDependencyResultReceiver resultReceiver) {
 		this.resultReceiver = resultReceiver;
 	}
 
@@ -208,7 +223,7 @@ public class HyFD implements FunctionalDependencyAlgorithm, BooleanParameterAlgo
 		if (numRecords == 0) {
 			ObjectArrayList<ColumnIdentifier> columnIdentifiers = this.buildColumnIdentifiers();
 			for (int attr = 0; attr < this.numAttributes; attr++)
-				this.resultReceiver.receiveResult(new FunctionalDependency(new ColumnCombination(), columnIdentifiers.get(attr)));
+				this.resultReceiver.receiveResult(new RelaxedFunctionalDependency(new ColumnCombination(), columnIdentifiers.get(attr), 1d));
 			return;
 		}
 		
@@ -246,10 +261,12 @@ public class HyFD implements FunctionalDependencyAlgorithm, BooleanParameterAlgo
 		//////////////////////////
 
 		// TODO: implement parallel sampling
-		
-		Sampler sampler = new Sampler(negCover, posCover, compressedRecords, plis, this.efficiencyThreshold, this.valueComparator, this.memoryGuardian);
+		int maxViolations = (int) (numRecords - (numRecords * threshold));
+		Logger.getInstance().writeln("Max Violations: " + maxViolations);
+
+		Sampler sampler = new Sampler(negCover, posCover, maxViolations, compressedRecords, plis, this.efficiencyThreshold, this.valueComparator, this.memoryGuardian);
 		Inductor inductor = new Inductor(negCover, posCover, this.memoryGuardian);
-		Validator validator = new Validator(negCover, posCover, numRecords, compressedRecords, plis, this.efficiencyThreshold, this.validateParallel, this.memoryGuardian);
+		Validator validator = new Validator(negCover, posCover, maxViolations, numRecords, compressedRecords, plis, this.efficiencyThreshold, this.validateParallel, this.memoryGuardian);
 		
 		List<IntegerPair> comparisonSuggestions = new ArrayList<>();
 		do {
@@ -269,61 +286,6 @@ public class HyFD implements FunctionalDependencyAlgorithm, BooleanParameterAlgo
 		Logger.getInstance().writeln("... done! (" + numFDs + " FDs)");
 	}
 
-	@SuppressWarnings("unused")
-	private void executeFDEP() throws AlgorithmExecutionException {
-		// Initialize
-		Logger.getInstance().writeln("Initializing ...");
-		RelationalInput relationalInput = this.getInput();
-		this.initialize(relationalInput);
-		
-		// Load data
-		Logger.getInstance().writeln("Loading data ...");
-		ObjectArrayList<List<String>> records = this.loadData(relationalInput);
-		this.closeInput(relationalInput);
-		
-		// Create default output if input is empty
-		if (records.isEmpty()) {
-			ObjectArrayList<ColumnIdentifier> columnIdentifiers = this.buildColumnIdentifiers();
-			for (int attr = 0; attr < this.numAttributes; attr++)
-				this.resultReceiver.receiveResult(new FunctionalDependency(new ColumnCombination(), columnIdentifiers.get(attr)));
-			return;
-		}
-		
-		int numRecords = records.size();
-		
-		// Calculate plis
-		Logger.getInstance().writeln("Calculating plis ...");
-		List<PositionListIndex> plis = PLIBuilder.getPLIs(records, this.numAttributes, this.valueComparator.isNullEqualNull());
-		records = null; // we proceed with the values in the plis
-		
-		// Calculate inverted plis
-		Logger.getInstance().writeln("Inverting plis ...");
-		int[][] invertedPlis = this.invertPlis(plis, numRecords);
-
-		// Extract the integer representations of all records from the inverted plis
-		Logger.getInstance().writeln("Extracting integer representations for the records ...");
-		int[][] compressedRecords = new int[numRecords][];
-		for (int recordId = 0; recordId < numRecords; recordId++)
-			compressedRecords[recordId] = this.fetchRecordFrom(recordId, invertedPlis);
-		
-		// Execute fdep
-		Logger.getInstance().writeln("Executing fdep ...");
-		FDEP fdep = new FDEP(this.numAttributes, this.valueComparator);
-		FDTree fds = fdep.execute(compressedRecords);
-		
-		// Output all valid FDs
-		Logger.getInstance().writeln("Translating fd-tree into result format ...");
-		List<FunctionalDependency> result = fds.getFunctionalDependencies(this.buildColumnIdentifiers(), plis);
-		plis = null;
-		int numFDs = 0;
-		for (FunctionalDependency fd : result) {
-			//Logger.getInstance().writeln(fd);
-			this.resultReceiver.receiveResult(fd);
-			numFDs++;
-		}
-		Logger.getInstance().writeln("... done! (" + numFDs + " FDs)");
-	}
-	
 	private RelationalInput getInput() throws InputGenerationException, AlgorithmConfigurationException {
 		RelationalInput relationalInput = this.inputGenerator.generateNewCopy();
 		if (relationalInput == null)

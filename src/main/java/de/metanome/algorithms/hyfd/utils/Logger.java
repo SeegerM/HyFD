@@ -24,11 +24,11 @@ public class Logger {
 	}
 	
 	public void write(Object message) {
-		this.write(message.toString());;
+		this.write(message.toString());
 	}
 	
 	public void writeln(Object message) {
-		this.writeln(message.toString());;
+		this.writeln(message.toString());
 	}
 	
 	public String read() {

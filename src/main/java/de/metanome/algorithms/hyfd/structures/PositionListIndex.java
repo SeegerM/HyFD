@@ -31,6 +31,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import de.uni_potsdam.hpi.utils.CollectionUtils;
 
@@ -43,7 +44,7 @@ import de.uni_potsdam.hpi.utils.CollectionUtils;
  */
 public class PositionListIndex {
 
-	protected final int attribute;
+	public final int attribute;
 	protected final List<IntArrayList> clusters;
 	protected final int numNonUniqueValues;
 	
@@ -94,6 +95,31 @@ public class PositionListIndex {
 		if ((this.clusters.size() == 1) && (this.clusters.get(0).size() == numRecords))
 			return true;
 		return false;
+	}
+
+	public boolean isApproximatelyConstant(int numRecords, int maxViolations, AtomicInteger violations) {
+		if (numRecords <= 1)
+			return true;
+		int maxFrequency = 0;
+		for (IntArrayList cluster : this.clusters) {
+			if (cluster.size() > maxFrequency)
+				maxFrequency = cluster.size();
+		}
+		violations.set(maxFrequency);
+		return maxFrequency >= (numRecords - maxViolations);
+	}
+
+	public boolean isApproximatelyConstant(int numRecords, double threshold) {
+		// Count how many records share the most common value
+		// For a simple implementation, assume that each cluster represents a distinct value.
+		// Sum the sizes of the clusters.
+		int maxFrequency = 0;
+		for (IntArrayList cluster : this.clusters) {
+			if (cluster.size() > maxFrequency) {
+				maxFrequency = cluster.size();
+			}
+		}
+		return ((double) maxFrequency / numRecords) >= threshold;
 	}
 
 /*	public PositionListIndex intersect(PositionListIndex otherPLI) {
@@ -252,7 +278,106 @@ public class PositionListIndex {
 		
 		return true;
 	}
-*/	
+*/
+
+	public boolean refinesApproximately(int[][] compressedRecords, int rhsAttr, AtomicInteger violations, int maxViolations) {
+		int totalViolations = 0;
+		if (this.clusters.isEmpty())
+			return true;
+		for (IntArrayList cluster : this.clusters) {
+			totalViolations += countClusterInValidity(compressedRecords, rhsAttr, cluster);
+			if (totalViolations > maxViolations)
+				return false;
+		}
+		violations.set(totalViolations);  // Update the AtomicInteger
+		return true;
+	}
+
+	public BitSet refinesApproximately(int[][] compressedRecords, BitSet lhs, BitSet rhs,
+									   List<IntegerPair> comparisonSuggestions, int maxViolations, Float[] scoreList, int numRecords) {
+		int rhsSize = rhs.cardinality();
+		BitSet refinedRhs = (BitSet) rhs.clone();
+
+		// Build mappings for the rhs attributes.
+		int[] rhsAttrId2Index = new int[compressedRecords[0].length];
+		int[] rhsAttrIndex2Id = new int[rhsSize];
+		int index = 0;
+		for (int rhsAttr = refinedRhs.nextSetBit(0); rhsAttr >= 0; rhsAttr = refinedRhs.nextSetBit(rhsAttr + 1)) {
+			rhsAttrId2Index[rhsAttr] = index;
+			rhsAttrIndex2Id[index] = rhsAttr;
+			index++;
+		}
+
+		// Counter for violations per rhs attribute.
+		int[] violationCounts = new int[compressedRecords[0].length];
+
+		// Iterate over clusters.
+		for (IntArrayList cluster : this.clusters) {
+			// Group records by their lhs “subcluster” based on the candidate lhs attributes.
+			Object2ObjectOpenHashMap<ClusterIdentifier, ClusterIdentifierWithRecord> subClusters =
+					new Object2ObjectOpenHashMap<>(cluster.size());
+			for (int recordId : cluster) {
+				ClusterIdentifier subClusterIdentifier = this.buildClusterIdentifier(lhs, lhs.cardinality(), compressedRecords[recordId]);
+				if (subClusterIdentifier == null)
+					continue;
+				if (subClusters.containsKey(subClusterIdentifier)) {
+					ClusterIdentifierWithRecord representative = subClusters.get(subClusterIdentifier);
+					// For every rhs attribute in the candidate, update violation counts.
+					for (int rhsAttr = refinedRhs.nextSetBit(0); rhsAttr >= 0; rhsAttr = refinedRhs.nextSetBit(rhsAttr + 1)) {
+						int currentRhsValue = compressedRecords[recordId][rhsAttr];
+						int repRhsValue = representative.get(rhsAttrId2Index[rhsAttr]);
+						if (currentRhsValue != -1 && currentRhsValue != repRhsValue) {
+							violationCounts[rhsAttr]++;
+							// Optionally, record a suggestion.
+							comparisonSuggestions.add(new IntegerPair(recordId, representative.getRecord()));
+						}
+					}
+				} else {
+					// First record in the subcluster becomes the representative.
+					int[] rhsValues = new int[rhsSize];
+					for (int i = 0; i < rhsSize; i++) {
+						rhsValues[i] = compressedRecords[recordId][rhsAttrIndex2Id[i]];
+					}
+					subClusters.put(subClusterIdentifier, new ClusterIdentifierWithRecord(rhsValues, recordId));
+				}
+			}
+		}
+
+		// Remove any rhs attribute that exceeds the allowed maxViolations.
+		for (int rhsAttr = refinedRhs.nextSetBit(0); rhsAttr >= 0; rhsAttr = refinedRhs.nextSetBit(rhsAttr + 1)) {
+			if (violationCounts[rhsAttr] > maxViolations) {
+				refinedRhs.clear(rhsAttr);
+			} else {
+				scoreList[rhsAttr] = 1f - ((float) violationCounts[rhsAttr] / (float) numRecords);
+			}
+		}
+		return refinedRhs;
+	}
+
+	public boolean refinesApproximately(int[][] compressedRecords, int rhsAttr, double threshold, int attribute, int totalRecords) {
+		int invalidRecords = 0;
+		if (this.clusters.isEmpty())
+			return true;
+		for (IntArrayList cluster : this.clusters) {
+			invalidRecords += countClusterInValidity(compressedRecords, rhsAttr, cluster);
+		}
+		int validRecords = totalRecords - invalidRecords;
+		return ((double) validRecords / totalRecords) >= threshold;
+	}
+
+	protected int countClusterInValidity(int[][] compressedRecords, int rhsAttr, IntArrayList cluster) {
+		// Get the reference value from the first record.
+		int reference = compressedRecords[cluster.getInt(0)][rhsAttr];
+		if (reference == -1)
+			return 0;  // or decide to treat this as a complete violation
+		int invalid = 0;
+		for (int recordId : cluster) {
+			if (compressedRecords[recordId][rhsAttr] != reference)
+				invalid++;
+		}
+		return invalid;
+	}
+
 	public boolean refines(int[][] compressedRecords, int rhsAttr) {
 		for (IntArrayList cluster : this.clusters)
 			if (!this.probe(compressedRecords, rhsAttr, cluster))
@@ -336,7 +461,84 @@ public class PositionListIndex {
 		return refinedRhs;
 	}
 */
-	public BitSet refines(int[][] compressedRecords, BitSet lhs, BitSet rhs, List<IntegerPair> comparisonSuggestions) {
+public BitSet refines(int[][] compressedRecords, BitSet lhs, BitSet rhs, List<IntegerPair> comparisonSuggestions, double threshold) {
+	int rhsSize = rhs.cardinality();
+	int lhsSize = lhs.cardinality();
+
+	// Create a clone of rhs to mark which attributes are (approximately) refined.
+	BitSet refinedRhs = (BitSet) rhs.clone();
+
+	// Build mappings for rhs attributes:
+	//   - rhsAttrId2Index: maps the actual attribute ID to a 0-based index.
+	//   - rhsAttrIndex2Id: inverse mapping to recover the actual attribute ID.
+	int[] rhsAttrId2Index = new int[compressedRecords[0].length];
+	int[] rhsAttrIndex2Id = new int[rhsSize];
+	int index = 0;
+	for (int rhsAttr = refinedRhs.nextSetBit(0); rhsAttr >= 0; rhsAttr = refinedRhs.nextSetBit(rhsAttr + 1)) {
+		rhsAttrId2Index[rhsAttr] = index;
+		rhsAttrIndex2Id[index] = rhsAttr;
+		index++;
+	}
+
+	// Initialize counters for each rhs attribute.
+	// For each attribute (by its ID), we count the number of comparisons made and those that agree.
+	int[] validCounts = new int[compressedRecords[0].length];
+	int[] totalCounts = new int[compressedRecords[0].length];
+
+	// Iterate over each cluster in this.clusters.
+	for (IntArrayList cluster : this.clusters) {
+		// Group records by their lhs cluster identifier.
+		Object2ObjectOpenHashMap<ClusterIdentifier, ClusterIdentifierWithRecord> subClusters
+				= new Object2ObjectOpenHashMap<>(cluster.size());
+
+		for (int recordId : cluster) {
+			ClusterIdentifier subClusterIdentifier = this.buildClusterIdentifier(lhs, lhsSize, compressedRecords[recordId]);
+			if (subClusterIdentifier == null)
+				continue;
+
+			if (subClusters.containsKey(subClusterIdentifier)) {
+				// For duplicate records in the same sub-cluster, compare the rhs values.
+				ClusterIdentifierWithRecord representative = subClusters.get(subClusterIdentifier);
+
+				// For each attribute in refinedRhs, update counters based on the comparison.
+				for (int rhsAttr = refinedRhs.nextSetBit(0); rhsAttr >= 0; rhsAttr = refinedRhs.nextSetBit(rhsAttr + 1)) {
+					totalCounts[rhsAttr]++;  // One more comparison for this attribute.
+
+					int currentRhsValue = compressedRecords[recordId][rhsAttr];
+					int repRhsValue = representative.get(rhsAttrId2Index[rhsAttr]);
+
+					// Check if the current record’s value agrees with the representative.
+					if (currentRhsValue != -1 && currentRhsValue == repRhsValue) {
+						validCounts[rhsAttr]++;
+					} else {
+						// Record a suggestion for a potential discrepancy.
+						comparisonSuggestions.add(new IntegerPair(recordId, representative.getRecord()));
+					}
+				}
+			} else {
+				// First record for this sub-cluster: store its rhs values as the representative.
+				int[] rhsValues = new int[rhsSize];
+				for (int i = 0; i < rhsSize; i++) {
+					rhsValues[i] = compressedRecords[recordId][rhsAttrIndex2Id[i]];
+				}
+				subClusters.put(subClusterIdentifier, new ClusterIdentifierWithRecord(rhsValues, recordId));
+			}
+		}
+	}
+
+	for (int rhsAttr = refinedRhs.nextSetBit(0); rhsAttr >= 0; rhsAttr = refinedRhs.nextSetBit(rhsAttr + 1)) {
+		int total = totalCounts[rhsAttr];
+		// If there were comparisons for this attribute, check if the valid ratio meets the threshold.
+		if (total > 0 && ((double) validCounts[rhsAttr] / total) < threshold) {
+			refinedRhs.clear(rhsAttr);
+		}
+	}
+
+	return refinedRhs;
+}
+
+
+	public BitSet refinesOld(int[][] compressedRecords, BitSet lhs, BitSet rhs, List<IntegerPair> comparisonSuggestions) {
 		int rhsSize = rhs.cardinality();
 		int lhsSize = lhs.cardinality();
 		
@@ -348,6 +550,7 @@ public class PositionListIndex {
 		int[] rhsAttrId2Index = new int[compressedRecords[0].length];
 		int[] rhsAttrIndex2Id = new int[rhsSize];
 		int index = 0;
+
 		for (int rhsAttr = refinedRhs.nextSetBit(0); rhsAttr >= 0; rhsAttr = refinedRhs.nextSetBit(rhsAttr + 1)) {
 			rhsAttrId2Index[rhsAttr] = index;
 			rhsAttrIndex2Id[index] = rhsAttr;
@@ -363,7 +566,7 @@ public class PositionListIndex {
 				
 				if (subClusters.containsKey(subClusterIdentifier)) {
 					ClusterIdentifierWithRecord rhsClusters = subClusters.get(subClusterIdentifier);
-					
+
 					for (int rhsAttr = refinedRhs.nextSetBit(0); rhsAttr >= 0; rhsAttr = refinedRhs.nextSetBit(rhsAttr + 1)) {
 						int rhsCluster = compressedRecords[recordId][rhsAttr];
 						if ((rhsCluster == -1) || (rhsCluster != rhsClusters.get(rhsAttrId2Index[rhsAttr]))) {

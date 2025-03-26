@@ -1,5 +1,8 @@
 package de.metanome.algorithms.hyfd.structures;
 
+import de.metanome.algorithm_integration.result_receiver.RelaxedFunctionalDependencyResultReceiver;
+import de.metanome.algorithm_integration.results.RelaxedFunctionalDependency;
+import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 
@@ -24,11 +27,13 @@ public class FDTreeElement {
 	protected BitSet rhsAttributes;
 	protected BitSet rhsFds;
 	protected int numAttributes;
+	protected Float[] score;
 	
 	public FDTreeElement(int numAttributes) {
 		this.rhsAttributes = new BitSet(numAttributes);
 		this.rhsFds = new BitSet(numAttributes);
 		this.numAttributes = numAttributes;
+		this.score = new Float[numAttributes];
 	}
 
 	public int getNumAttributes() {
@@ -566,7 +571,7 @@ public class FDTreeElement {
 		}
 	}
 	
-	public void addFunctionalDependenciesInto(List<FunctionalDependency> functionalDependencies, BitSet lhs, ObjectArrayList<ColumnIdentifier> columnIdentifiers, List<PositionListIndex> plis) {
+	public void addFunctionalDependenciesInto(List<RelaxedFunctionalDependency> functionalDependencies, BitSet lhs, ObjectArrayList<ColumnIdentifier> columnIdentifiers, List<PositionListIndex> plis) {
 		for (int rhs = this.rhsFds.nextSetBit(0); rhs >= 0; rhs = this.rhsFds.nextSetBit(rhs + 1)) {
 			ColumnIdentifier[] columns = new ColumnIdentifier[lhs.cardinality()];
 			int j = 0;
@@ -577,7 +582,8 @@ public class FDTreeElement {
 			
 			ColumnCombination colCombination = new ColumnCombination(columns);
 			int rhsId = plis.get(rhs).getAttribute(); // Here we translate the column rhs back to the real column rhs before the sorting
-			FunctionalDependency fdResult = new FunctionalDependency(colCombination, columnIdentifiers.get(rhsId));
+			float localScore = score[rhs];
+			RelaxedFunctionalDependency fdResult = new RelaxedFunctionalDependency(colCombination, columnIdentifiers.get(rhsId), (double) localScore);
 			functionalDependencies.add(fdResult);
 		}
 
@@ -594,7 +600,7 @@ public class FDTreeElement {
 		}
 	}
 
-	public int addFunctionalDependenciesInto(FunctionalDependencyResultReceiver resultReceiver, BitSet lhs, ObjectArrayList<ColumnIdentifier> columnIdentifiers, List<PositionListIndex> plis) throws CouldNotReceiveResultException, ColumnNameMismatchException {
+	public int addFunctionalDependenciesInto(RelaxedFunctionalDependencyResultReceiver resultReceiver, BitSet lhs, ObjectArrayList<ColumnIdentifier> columnIdentifiers, List<PositionListIndex> plis) throws CouldNotReceiveResultException, ColumnNameMismatchException {
 		int numFDs = 0;
 		for (int rhs = this.rhsFds.nextSetBit(0); rhs >= 0; rhs = this.rhsFds.nextSetBit(rhs + 1)) {
 			ColumnIdentifier[] columns = new ColumnIdentifier[lhs.cardinality()];
@@ -606,7 +612,8 @@ public class FDTreeElement {
 			
 			ColumnCombination colCombination = new ColumnCombination(columns);
 			int rhsId = plis.get(rhs).getAttribute(); // Here we translate the column rhs back to the real column rhs before the sorting
-			FunctionalDependency fdResult = new FunctionalDependency(colCombination, columnIdentifiers.get(rhsId));
+			float localScore = lhs.isEmpty() ? 1f : score[rhs];
+			RelaxedFunctionalDependency fdResult = new RelaxedFunctionalDependency(colCombination, columnIdentifiers.get(rhsId), (double) localScore);
 			resultReceiver.receiveResult(fdResult);
 			numFDs++;
 		}
@@ -682,6 +689,16 @@ public class FDTreeElement {
 			}
 		}
 		return allChildrenFiltered && (this.rhsFds.nextSetBit(0) < 0);
+	}
+
+	public void addScore(int rhsAttr, float localScore) {
+		this.score[rhsAttr] = localScore;
+	}
+
+	public void addScores(BitSet validRhs, Float[] scoreList) {
+		for (int rhsAttr = validRhs.nextSetBit(0); rhsAttr >= 0; rhsAttr = validRhs.nextSetBit(rhsAttr + 1)) {
+			addScore(rhsAttr, scoreList[rhsAttr]);
+		}
 	}
 
 	protected class ElementLhsPair {

@@ -56,7 +56,7 @@ public class MemoryGuardian {
 				if (depth < 1)
 					throw new RuntimeException("Insufficient memory to calculate any result!");
 				
-				System.out.print(" (trim to " + depth + ")");
+				//System.out.print(" (trim to " + depth + ")");
 				posCover.trim(depth);
 				negCover.trim(depth);
 				if (newNonFDs != null)

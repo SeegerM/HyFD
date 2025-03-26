@@ -9,6 +9,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import de.metanome.algorithm_integration.AlgorithmExecutionException;
 import de.metanome.algorithms.hyfd.structures.FDSet;
@@ -18,6 +19,7 @@ import de.metanome.algorithms.hyfd.structures.FDTreeElementLhsPair;
 import de.metanome.algorithms.hyfd.structures.IntegerPair;
 import de.metanome.algorithms.hyfd.structures.PositionListIndex;
 import de.metanome.algorithms.hyfd.utils.Logger;
+import it.unimi.dsi.fastutil.floats.FloatArrayList;
 
 public class Validator {
 
@@ -29,10 +31,12 @@ public class Validator {
 	private float efficiencyThreshold;
 	private MemoryGuardian memoryGuardian;
 	private ExecutorService executor;
-	
+	private final double threshold = 0.9d;
+	private int maxViolations;
+
 	private int level = 0;
 
-	public Validator(FDSet negCover, FDTree posCover, int numRecords, int[][] compressedRecords, List<PositionListIndex> plis, float efficiencyThreshold, boolean parallel, MemoryGuardian memoryGuardian) {
+	public Validator(FDSet negCover, FDTree posCover, int maxViolations, int numRecords, int[][] compressedRecords, List<PositionListIndex> plis, float efficiencyThreshold, boolean parallel, MemoryGuardian memoryGuardian) {
 		this.negCover = negCover;
 		this.posCover = posCover;
 		this.numRecords = numRecords;
@@ -40,6 +44,7 @@ public class Validator {
 		this.compressedRecords = compressedRecords;
 		this.efficiencyThreshold = efficiencyThreshold;
 		this.memoryGuardian = memoryGuardian;
+		this.maxViolations = maxViolations;
 		
 		if (parallel) {
 			int numThreads = Runtime.getRuntime().availableProcessors();
@@ -77,6 +82,62 @@ public class Validator {
 		public ValidationTask(FDTreeElementLhsPair elementLhsPair) {
 			this.elementLhsPair = elementLhsPair;
 		}
+
+		public ValidationResult call2() throws Exception {
+			ValidationResult result = new ValidationResult();
+
+			FDTreeElement element = this.elementLhsPair.getElement();
+			BitSet lhs = this.elementLhsPair.getLhs();
+			BitSet rhs = element.getFds();
+
+			int rhsSize = rhs.cardinality();
+			if (rhsSize == 0)
+				return result;
+			result.validations = result.validations + rhsSize;
+
+			if (Validator.this.level == 0) {
+				// Check if rhs is unique
+				for (int rhsAttr = rhs.nextSetBit(0); rhsAttr >= 0; rhsAttr = rhs.nextSetBit(rhsAttr + 1)) {
+					//if (!Validator.this.plis.get(rhsAttr).isConstant(Validator.this.numRecords)) {
+					if (!Validator.this.plis.get(rhsAttr).isConstant(Validator.this.numRecords)) {
+						element.removeFd(rhsAttr);
+						result.invalidFDs.add(new FD(lhs, rhsAttr));
+					}
+					result.intersections++;
+				}
+			}
+			else if (Validator.this.level == 1) {
+				// Check if lhs from plis refines rhs
+				int lhsAttribute = lhs.nextSetBit(0);
+				for (int rhsAttr = rhs.nextSetBit(0); rhsAttr >= 0; rhsAttr = rhs.nextSetBit(rhsAttr + 1)) {
+					//if (!Validator.this.plis.get(lhsAttribute).refines(Validator.this.compressedRecords, rhsAttr)) {
+					if (!Validator.this.plis.get(lhsAttribute).refines(Validator.this.compressedRecords, rhsAttr)) {
+						element.removeFd(rhsAttr);
+						result.invalidFDs.add(new FD(lhs, rhsAttr));
+					}
+					result.intersections++;
+				}
+			}
+			else {
+				// Check if lhs from plis plus remaining inverted plis refines rhs
+				int firstLhsAttr = lhs.nextSetBit(0);
+
+				lhs.clear(firstLhsAttr);
+				BitSet validRhs = Validator.this.plis.get(firstLhsAttr).refinesOld(Validator.this.compressedRecords, lhs, rhs, result.comparisonSuggestions);
+				lhs.set(firstLhsAttr);
+
+				result.intersections++;
+
+				rhs.andNot(validRhs); // Now contains all invalid FDs
+				element.setFds(validRhs); // Sets the valid FDs in the FD tree
+
+				for (int rhsAttr = rhs.nextSetBit(0); rhsAttr >= 0; rhsAttr = rhs.nextSetBit(rhsAttr + 1))
+					result.invalidFDs.add(new FD(lhs, rhsAttr));
+			}
+			return result;
+		}
+
+		// Partial Validation Call
 		public ValidationResult call() throws Exception {
 			ValidationResult result = new ValidationResult();
 			
@@ -92,9 +153,13 @@ public class Validator {
 			if (Validator.this.level == 0) {
 				// Check if rhs is unique
 				for (int rhsAttr = rhs.nextSetBit(0); rhsAttr >= 0; rhsAttr = rhs.nextSetBit(rhsAttr + 1)) {
-					if (!Validator.this.plis.get(rhsAttr).isConstant(Validator.this.numRecords)) {
+					//if (!Validator.this.plis.get(rhsAttr).isConstant(Validator.this.numRecords)) {
+					AtomicInteger violations = new AtomicInteger(0);
+					if (!Validator.this.plis.get(rhsAttr).isApproximatelyConstant(Validator.this.numRecords, Validator.this.maxViolations, violations)) {
 						element.removeFd(rhsAttr);
 						result.invalidFDs.add(new FD(lhs, rhsAttr));
+					} else {
+						element.addScore(rhsAttr, violations.get() == 0 ? 1f : 1f - ((float) violations.get() / (float) Validator.this.numRecords));
 					}
 					result.intersections++;
 				}
@@ -102,10 +167,15 @@ public class Validator {
 			else if (Validator.this.level == 1) {
 				// Check if lhs from plis refines rhs
 				int lhsAttribute = lhs.nextSetBit(0);
+
 				for (int rhsAttr = rhs.nextSetBit(0); rhsAttr >= 0; rhsAttr = rhs.nextSetBit(rhsAttr + 1)) {
-					if (!Validator.this.plis.get(lhsAttribute).refines(Validator.this.compressedRecords, rhsAttr)) {
+					//if (!Validator.this.plis.get(lhsAttribute).refinesApproximately(Validator.this.compressedRecords, rhsAttr, 0.95d, plis.get(lhsAttribute).attribute, Validator.this.numRecords)) {
+					AtomicInteger violations = new AtomicInteger(0);
+					if (!Validator.this.plis.get(lhsAttribute).refinesApproximately(Validator.this.compressedRecords, rhsAttr, violations, Validator.this.maxViolations)) {
 						element.removeFd(rhsAttr);
 						result.invalidFDs.add(new FD(lhs, rhsAttr));
+					} else {
+						element.addScore(rhsAttr, violations.get() == 0 ? 1f : 1f - ((float) violations.get() / (float) Validator.this.numRecords));
 					}
 					result.intersections++;
 				}
@@ -115,14 +185,15 @@ public class Validator {
 				int firstLhsAttr = lhs.nextSetBit(0);
 				
 				lhs.clear(firstLhsAttr);
-				BitSet validRhs = Validator.this.plis.get(firstLhsAttr).refines(Validator.this.compressedRecords, lhs, rhs, result.comparisonSuggestions);
+				Float[] scoreList = new Float[rhs.size()];
+				BitSet validRhs = Validator.this.plis.get(firstLhsAttr).refinesApproximately(Validator.this.compressedRecords, lhs, rhs, result.comparisonSuggestions, Validator.this.maxViolations, scoreList, Validator.this.numRecords);
 				lhs.set(firstLhsAttr);
 				
 				result.intersections++;
 				
 				rhs.andNot(validRhs); // Now contains all invalid FDs
 				element.setFds(validRhs); // Sets the valid FDs in the FD tree
-				
+				element.addScores(validRhs, scoreList);
 				for (int rhsAttr = rhs.nextSetBit(0); rhsAttr >= 0; rhsAttr = rhs.nextSetBit(rhsAttr + 1))
 					result.invalidFDs.add(new FD(lhs, rhsAttr));
 			}
