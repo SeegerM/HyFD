@@ -12,6 +12,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import de.metanome.algorithm_integration.AlgorithmExecutionException;
+import de.metanome.algorithm_integration.ColumnIdentifier;
 import de.metanome.algorithms.hyfd.structures.FDSet;
 import de.metanome.algorithms.hyfd.structures.FDTree;
 import de.metanome.algorithms.hyfd.structures.FDTreeElement;
@@ -19,7 +20,7 @@ import de.metanome.algorithms.hyfd.structures.FDTreeElementLhsPair;
 import de.metanome.algorithms.hyfd.structures.IntegerPair;
 import de.metanome.algorithms.hyfd.structures.PositionListIndex;
 import de.metanome.algorithms.hyfd.utils.Logger;
-import it.unimi.dsi.fastutil.floats.FloatArrayList;
+import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 
 public class Validator {
 
@@ -33,10 +34,10 @@ public class Validator {
 	private ExecutorService executor;
 	private final double threshold = 0.9d;
 	private int maxViolations;
-
+	ObjectArrayList<ColumnIdentifier> columnIdentifiers;
 	private int level = 0;
 
-	public Validator(FDSet negCover, FDTree posCover, int maxViolations, int numRecords, int[][] compressedRecords, List<PositionListIndex> plis, float efficiencyThreshold, boolean parallel, MemoryGuardian memoryGuardian) {
+	public Validator(FDSet negCover, FDTree posCover, int maxViolations, int numRecords, int[][] compressedRecords, List<PositionListIndex> plis, float efficiencyThreshold, boolean parallel, MemoryGuardian memoryGuardian, ObjectArrayList<ColumnIdentifier> columnIdentifiers) {
 		this.negCover = negCover;
 		this.posCover = posCover;
 		this.numRecords = numRecords;
@@ -45,6 +46,7 @@ public class Validator {
 		this.efficiencyThreshold = efficiencyThreshold;
 		this.memoryGuardian = memoryGuardian;
 		this.maxViolations = maxViolations;
+		this.columnIdentifiers = columnIdentifiers;
 		
 		if (parallel) {
 			int numThreads = Runtime.getRuntime().availableProcessors();
@@ -167,11 +169,10 @@ public class Validator {
 			else if (Validator.this.level == 1) {
 				// Check if lhs from plis refines rhs
 				int lhsAttribute = lhs.nextSetBit(0);
-
 				for (int rhsAttr = rhs.nextSetBit(0); rhsAttr >= 0; rhsAttr = rhs.nextSetBit(rhsAttr + 1)) {
 					//if (!Validator.this.plis.get(lhsAttribute).refinesApproximately(Validator.this.compressedRecords, rhsAttr, 0.95d, plis.get(lhsAttribute).attribute, Validator.this.numRecords)) {
 					AtomicInteger violations = new AtomicInteger(0);
-					if (!Validator.this.plis.get(lhsAttribute).refinesApproximately(Validator.this.compressedRecords, rhsAttr, violations, Validator.this.maxViolations)) {
+					if (!Validator.this.plis.get(lhsAttribute).refinesApproximately(Validator.this.compressedRecords, rhsAttr, violations, Validator.this.maxViolations, plis.get(rhsAttr).getAttribute(), plis.get(lhsAttribute).getAttribute(), columnIdentifiers.get(plis.get(lhsAttribute).getAttribute()).toString(), columnIdentifiers.get(plis.get(rhsAttr).attribute).toString())) {
 						element.removeFd(rhsAttr);
 						result.invalidFDs.add(new FD(lhs, rhsAttr));
 					} else {

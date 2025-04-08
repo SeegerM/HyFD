@@ -1,12 +1,9 @@
 package de.metanome.algorithms.hyfd;
 
+import java.nio.ByteBuffer;
 import java.util.*;
 
-import de.metanome.algorithms.hyfd.structures.FDList;
-import de.metanome.algorithms.hyfd.structures.FDSet;
-import de.metanome.algorithms.hyfd.structures.FDTree;
-import de.metanome.algorithms.hyfd.structures.IntegerPair;
-import de.metanome.algorithms.hyfd.structures.PositionListIndex;
+import de.metanome.algorithms.hyfd.structures.*;
 import de.metanome.algorithms.hyfd.utils.Logger;
 import de.metanome.algorithms.hyfd.utils.ValueComparator;
 import it.unimi.dsi.fastutil.ints.Int2IntArrayMap;
@@ -42,7 +39,7 @@ public class Sampler {
 		Logger.getInstance().writeln("Investigating comparison suggestions ... ");
 		FDList newNonFds = new FDList(numAttributes, this.negCover.getMaxDepth());
 		BitSet equalAttrs = new BitSet(this.posCover.getNumAttributes());
-		HashMap<BitSet, Integer> map = new HashMap<>();
+		HashMap<BitSetKey, Integer> map = new HashMap<>();
 
 		for (IntegerPair comparisonSuggestion : comparisonSuggestions) {
 			// Update equalAttrs and per-attribute violation data.
@@ -108,9 +105,11 @@ public class Sampler {
 		return newNonFds;
 	}
 
-	private void checkViolations(FDList newNonFds, HashMap<BitSet, Integer> map, FDSet negCover, MemoryGuardian memoryGuardian, FDTree posCover) {
-		for (BitSet set : map.keySet()){
-			if (map.get(set) >= maxViolations){
+	private void checkViolations(FDList newNonFds, HashMap<BitSetKey, Integer> map, FDSet negCover, MemoryGuardian memoryGuardian, FDTree posCover) {
+		for (BitSetKey setKey : map.keySet()){
+			if (map.get(setKey) >= maxViolations){
+				//System.out.println(setKey.hashCode());
+				BitSet set = setKey.getBitSet();
 				BitSet candidateCopy = (BitSet) set.clone();
 				negCover.add(candidateCopy);
 				newNonFds.add(candidateCopy);
@@ -232,7 +231,7 @@ public class Sampler {
 			
 			int previousNegCoverSize = newNonFds.size();
 			Iterator<IntArrayList> clusterIterator = this.clusters.iterator();
-			HashMap<BitSet, Integer> map = new HashMap<>();
+			HashMap<BitSetKey, Integer> map = new HashMap<>();
 
 			while (clusterIterator.hasNext()) {
 				IntArrayList cluster = clusterIterator.next();
@@ -258,11 +257,11 @@ public class Sampler {
 		}
 	}
 
-	private void match(BitSet equalAttrs, int t1, int t2, HashMap<BitSet, Integer> map) {
+	private void match(BitSet equalAttrs, int t1, int t2, HashMap<BitSetKey, Integer> map) {
 		this.match(equalAttrs, this.compressedRecords[t1], this.compressedRecords[t2], map);
 	}
 
-	private void match(BitSet equalAttrs, int[] t1, int[] t2, HashMap<BitSet, Integer> map) {
+	private void match(BitSet equalAttrs, int[] t1, int[] t2, HashMap<BitSetKey, Integer> map) {
 		equalAttrs.clear(0, t1.length);
 		int n = t1.length;
 
@@ -274,8 +273,9 @@ public class Sampler {
 		}
 
 		if (equalAttrs.cardinality() != n){
-			map.putIfAbsent(equalAttrs,0);
-			map.put(equalAttrs, map.get(equalAttrs)+1);
+			BitSetKey key = new BitSetKey((BitSet) equalAttrs.clone());
+			map.putIfAbsent(key,0);
+			map.put(key, map.get(key)+1);
 		}
 	}
 }

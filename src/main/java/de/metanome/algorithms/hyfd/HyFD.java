@@ -264,14 +264,14 @@ public class HyFD implements RelaxedFunctionalDependencyAlgorithm, BooleanParame
 		int maxViolations = (int) (numRecords - (numRecords * threshold));
 		Logger.getInstance().writeln("Max Violations: " + maxViolations);
 
-		Sampler sampler = new Sampler(negCover, posCover, maxViolations, compressedRecords, plis, this.efficiencyThreshold, this.valueComparator, this.memoryGuardian);
-		Inductor inductor = new Inductor(negCover, posCover, this.memoryGuardian);
-		Validator validator = new Validator(negCover, posCover, maxViolations, numRecords, compressedRecords, plis, this.efficiencyThreshold, this.validateParallel, this.memoryGuardian);
+		//Sampler sampler = new Sampler(negCover, posCover, maxViolations, compressedRecords, plis, this.efficiencyThreshold, this.valueComparator, this.memoryGuardian);
+		//Inductor inductor = new Inductor(negCover, posCover, this.memoryGuardian);
+		Validator validator = new Validator(negCover, posCover, maxViolations, numRecords, compressedRecords, plis, this.efficiencyThreshold, this.validateParallel, this.memoryGuardian, this.buildColumnIdentifiers());
 		
 		List<IntegerPair> comparisonSuggestions = new ArrayList<>();
 		do {
-			FDList newNonFds = sampler.enrichNegativeCover(comparisonSuggestions);
-			inductor.updatePositiveCover(newNonFds);
+			//FDList newNonFds = sampler.enrichNegativeCover(comparisonSuggestions);
+			//inductor.updatePositiveCover(newNonFds);
 			comparisonSuggestions = validator.validatePositiveCover();
 		}
 		while (comparisonSuggestions != null);

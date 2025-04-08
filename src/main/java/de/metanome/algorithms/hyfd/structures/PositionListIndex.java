@@ -24,13 +24,10 @@ import it.unimi.dsi.fastutil.ints.IntSet;
 import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 
-import java.util.ArrayList;
-import java.util.BitSet;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.LinkedList;
-import java.util.List;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import de.uni_potsdam.hpi.utils.CollectionUtils;
@@ -279,6 +276,110 @@ public class PositionListIndex {
 		return true;
 	}
 */
+
+	public boolean refinesApproximately(int[][] compressedRecords, int rhsAttr,
+										AtomicInteger violations, int maxViolations, int rhsAttr2, int lhsAttr, String lhs, String rhs) {
+		int totalViolations = 0;
+		// List to store details about each violation.
+		List<String> violationDetails = new ArrayList<>();
+
+		if (this.clusters.isEmpty())
+			return true;
+
+		// Process each cluster to count violations and record details
+		for (IntArrayList cluster : this.clusters) {
+			totalViolations += countClusterInValidity2(compressedRecords, rhsAttr, cluster, lhsAttr, violationDetails);
+			if (totalViolations > maxViolations)
+				return false;
+		}
+		// Update the AtomicInteger with the total violation count.
+		violations.set(totalViolations);
+
+		storeViolationDetails(violationDetails, lhsAttr, rhsAttr2, lhs, rhs);
+
+		return true;
+	}
+
+	/**
+	 * Counts the violations in a given cluster and records the details.
+	 * For each violation, a string is added to 'violationDetails' containing:
+	 * - the record id,
+	 * - the left-hand side (lhs) attribute value, and
+	 * - the right-hand side (rhs) attribute value.
+	 */
+	protected int countClusterInValidity(int[][] compressedRecords, int rhsAttr,
+										 IntArrayList cluster, int lhsAttr, List<String> violationDetails) {
+		// Determine the reference value from the first record in the cluster.
+		int reference = compressedRecords[cluster.getInt(0)][rhsAttr];
+		if (reference == -1)
+			return 0;  // Alternatively, this could be treated as a violation.
+
+		int invalid = 0;
+		// Iterate over each record in the cluster.
+		for (int recordId : cluster) {
+			if (compressedRecords[recordId][rhsAttr] != reference) {
+				invalid++;
+				// Format: "RecordID: {recordId}, LHS: {lhsValue}, RHS: {rhsValue}"
+				String detail = "" + recordId;
+				violationDetails.add(detail);
+			}
+		}
+		return invalid;
+	}
+
+	protected int countClusterInValidity2(int[][] compressedRecords, int rhsAttr,
+										 IntArrayList cluster, int lhsAttr, List<String> violationDetails) {
+		Map<Integer, Integer> frequencyMap = new HashMap<>();
+
+		// Step 1: Count frequency of each value in the RHS attribute within the cluster
+		for (int recordId : cluster) {
+			int value = compressedRecords[recordId][rhsAttr];
+			if (value != -1) {
+				frequencyMap.put(value, frequencyMap.getOrDefault(value, 0) + 1);
+			}
+		}
+
+		if (frequencyMap.isEmpty()) {
+			return 0; // No valid reference values
+		}
+
+		// Step 2: Find the most frequent value
+		int reference = -1;
+		int maxFreq = 0;
+		for (Map.Entry<Integer, Integer> entry : frequencyMap.entrySet()) {
+			if (entry.getValue() > maxFreq) {
+				maxFreq = entry.getValue();
+				reference = entry.getKey();
+			}
+		}
+
+		// Step 3: Count violations
+		int invalid = 0;
+		for (int recordId : cluster) {
+			int value = compressedRecords[recordId][rhsAttr];
+			if (value != reference) {
+				invalid++;
+				violationDetails.add(String.valueOf(recordId));
+			}
+		}
+
+		return invalid;
+	}
+
+
+	/**
+	 * Saves the list of violation details to a temporary file.
+	 * Each detail is written on a new line.
+	 */
+	private void storeViolationDetails(List<String> violationDetails, int lhsAttr, int rhsAttr, String lhs, String rhs) {
+		// Create a file in the system's temp directory.
+		File tempFile = new File(System.getProperty("java.io.tmpdir"), "violations_temp.txt");
+		try (FileWriter writer = new FileWriter(tempFile, true)) {  // Open file in append mode.
+			writer.write("FD(" + lhsAttr+ "," + lhs + "->" + rhsAttr + "," + rhs + "): " + String.join(",", violationDetails) + System.lineSeparator());
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+	}
 
 	public boolean refinesApproximately(int[][] compressedRecords, int rhsAttr, AtomicInteger violations, int maxViolations) {
 		int totalViolations = 0;
