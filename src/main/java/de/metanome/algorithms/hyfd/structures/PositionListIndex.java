@@ -288,6 +288,8 @@ public class PositionListIndex {
 
 		// Process each cluster to count violations and record details
 		for (IntArrayList cluster : this.clusters) {
+			if (cluster.size() == 2)
+				System.out.print("");
 			totalViolations += countClusterInValidity2(compressedRecords, rhsAttr, cluster, lhsAttr, violationDetails);
 			if (totalViolations > maxViolations)
 				return false;
@@ -327,7 +329,7 @@ public class PositionListIndex {
 		return invalid;
 	}
 
-	protected int countClusterInValidity2(int[][] compressedRecords, int rhsAttr,
+	public int countClusterInValidity2(int[][] compressedRecords, int rhsAttr,
 										 IntArrayList cluster, int lhsAttr, List<String> violationDetails) {
 		Map<Integer, Integer> frequencyMap = new HashMap<>();
 
@@ -339,8 +341,10 @@ public class PositionListIndex {
 			}
 		}
 
-		if (frequencyMap.isEmpty()) {
-			return 0; // No valid reference values
+		if (frequencyMap.isEmpty()) { //Special Case
+			for (int i = 1; i < cluster.size(); i++)
+				violationDetails.add(String.valueOf(cluster.getInt(i)));
+			return cluster.size()-1; // No valid reference values
 		}
 
 		// Step 2: Find the most frequent value
