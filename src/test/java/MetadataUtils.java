@@ -8,7 +8,6 @@ import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
 import java.util.*;
-import java.util.stream.Collectors;
 
 public class MetadataUtils {
 
@@ -21,8 +20,24 @@ public class MetadataUtils {
         }
         List<Pair<RelaxedFunctionalDependency, PdepTuple>> results = new ArrayList<>();
         for (Result fd : fds) {
-            PdepTuple pdep = getPdep((RelaxedFunctionalDependency) fd, columnData);
-            results.add(new Pair<>((RelaxedFunctionalDependency) fd, pdep));
+            RelaxedFunctionalDependency rfd = (RelaxedFunctionalDependency) fd;
+            if (rfd.getDeterminant().getColumnIdentifiers().isEmpty()){
+                for (String columnName : columnData.keySet()){
+                    if (columnName.equals(rfd.getDependant().getColumnIdentifier()))
+                        continue;
+                    ColumnIdentifier ci = new ColumnIdentifier(fileNames[0].getName(),columnName);
+                    RelaxedFunctionalDependency newrfd = new RelaxedFunctionalDependency(new ColumnCombination(ci),rfd.getDependant(), rfd.getMeasure());
+                    PdepTuple pdep = getPdep(newrfd, columnData);
+                    Pair<RelaxedFunctionalDependency, PdepTuple> pair = new Pair<>(newrfd, pdep);
+                    if (!results.contains(pair))
+                        results.add(pair);
+                    else
+                        System.out.println("Already contains " + newrfd);
+                }
+            } else {
+                PdepTuple pdep = getPdep(rfd, columnData);
+                results.add(new Pair<>(rfd, pdep));
+            }
         }
         return results;
     }
@@ -71,14 +86,9 @@ public class MetadataUtils {
 
         double pdep = fd.getMeasure();
         double pdep2 = 1d;
+
         if (!determinant.getColumnIdentifiers().isEmpty()){
-            pdep2 = pdep(new ArrayList<>(determinant.getColumnIdentifiers()).get(0).getColumnIdentifier(), dependant.getColumnIdentifier(), columnData);
-   /*         if (pdep != pdep2){
-                System.out.println(pdep);
-                System.out.println(pdep2);
-                pdep = pdep2;
-            }
-    */
+            pdep2 = pdep(determinant.getColumnIdentifiers(), dependant.getColumnIdentifier(), columnData);
         }
         double gpdep = gpdep(frequencyMapDet, frequencyMapDep, N, pdep2);
 
@@ -90,8 +100,25 @@ public class MetadataUtils {
         return pdepB + (dA - 1.0) / (N - 1.0) * (1.0 - pdepB);
     }
 
-    private static double pdep(String determine, String dependent, Map<String, List<String>> columnData) {
-        List<String> detValues = columnData.get(determine);
+    private static double pdep(Set<ColumnIdentifier> determine, String dependent, Map<String, List<String>> columnData) {
+        int numRecords = columnData.get(new ArrayList<>(determine).get(0).getColumnIdentifier().toString()).size();
+        List<String> detValues = new ArrayList<>(numRecords);
+        for (int i = 0; i < numRecords; i++) {
+            StringBuilder compositeValue = new StringBuilder();
+            // For each ColumnIdentifier in our ordered list, append its value at record i.
+            for (ColumnIdentifier cid : determine) {
+                // Assuming the key is obtained by toString(); if you have another method, use that.
+                String colName = cid.getColumnIdentifier().toString();
+                List<String> colData = columnData.get(colName);
+                if (colData == null) {
+                    // If a column is missing, append a marker.
+                    compositeValue.append("null");
+                } else {
+                    compositeValue.append(colData.get(i));
+                }
+            }
+            detValues.add(compositeValue.toString());
+        }
         List<String> depValues = columnData.get(dependent);
 
         if (detValues == null || depValues == null || detValues.size() != depValues.size()) {

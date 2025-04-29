@@ -16,6 +16,7 @@
 
 package de.metanome.algorithms.hyfd.structures;
 
+import de.metanome.algorithm_integration.ColumnIdentifier;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
@@ -29,8 +30,10 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 import de.uni_potsdam.hpi.utils.CollectionUtils;
+import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 
 /**
  * Position list indices (or stripped partitions) are an index structure that
@@ -94,16 +97,35 @@ public class PositionListIndex {
 		return false;
 	}
 
-	public boolean isApproximatelyConstant(int numRecords, int maxViolations, AtomicInteger violations) {
-		if (numRecords <= 1)
+	public boolean isApproximatelyConstant(int numRecords, int maxViolations, AtomicInteger violations, String rhsName) {
+		if (numRecords <= 1) {
 			return true;
-		int maxFrequency = 0;
-		for (IntArrayList cluster : this.clusters) {
-			if (cluster.size() > maxFrequency)
-				maxFrequency = cluster.size();
 		}
-		violations.set(maxFrequency);
-		return maxFrequency >= (numRecords - maxViolations);
+		int maxFrequency = 0;
+		IntArrayList dominantCluster = null;
+		for (IntArrayList cluster : this.clusters) {
+			if (cluster.size() > maxFrequency) {
+				maxFrequency = cluster.size();
+				dominantCluster = cluster;
+			}
+		}
+
+		int violationCount = numRecords - maxFrequency;
+
+		List<String> violationDetails = new ArrayList<>();
+		for (IntArrayList cluster : this.clusters) {
+			if (cluster != dominantCluster) {
+				for (int i = 0; i < cluster.size(); i++) {
+					violationDetails.add(String.valueOf(cluster.getInt(i)));
+				}
+			}
+		}
+
+		violations.set(violationCount);
+
+		storeViolationDetails(violationDetails, -1, attribute, "[]", rhsName);
+
+		return violationCount <= maxViolations;
 	}
 
 	public boolean isApproximatelyConstant(int numRecords, double threshold) {
@@ -288,8 +310,6 @@ public class PositionListIndex {
 
 		// Process each cluster to count violations and record details
 		for (IntArrayList cluster : this.clusters) {
-			if (cluster.size() == 2)
-				System.out.print("");
 			totalViolations += countClusterInValidity2(compressedRecords, rhsAttr, cluster, lhsAttr, violationDetails);
 			if (totalViolations > maxViolations)
 				return false;
@@ -370,6 +390,18 @@ public class PositionListIndex {
 		return invalid;
 	}
 
+	private void storeViolationDetails(List<String> violationDetails, List<Integer> lhsAttr, int rhsAttr, List<String> lhs, String rhs) {
+		// Create a file in the system's temp directory.
+		File tempFile = new File(System.getProperty("java.io.tmpdir"), "violations_temp.txt");
+		try (FileWriter writer = new FileWriter(tempFile, true)) {  // Open file in append mode.
+			String lhsAttrString = lhsAttr.stream().map(Object::toString).collect(Collectors.joining(","));
+			String lhsString = String.join(",", lhs);
+			writer.write("FD(" + lhsAttrString + "," + lhsString + "->" + rhsAttr + "," + rhs + "): "
+					+ String.join(",", violationDetails) + System.lineSeparator());
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+	}
 
 	/**
 	 * Saves the list of violation details to a temporary file.
@@ -399,6 +431,100 @@ public class PositionListIndex {
 	}
 
 	public BitSet refinesApproximately(int[][] compressedRecords, BitSet lhs, BitSet rhs,
+									   List<IntegerPair> comparisonSuggestions, int maxViolations,
+									   Float[] scoreList, int numRecords, List<PositionListIndex> plis, ObjectArrayList<ColumnIdentifier> columnIdentifiers, BitSet clone) {
+
+		List<Integer> lhsIndex = new ArrayList<>();
+		List<String> lhsIdentifiers = new ArrayList<>();
+		for (int rhsAttr = clone.nextSetBit(0); rhsAttr >= 0;
+			 rhsAttr = clone.nextSetBit(rhsAttr + 1)){
+			lhsIndex.add(plis.get(rhsAttr).getAttribute());
+			lhsIdentifiers.add(columnIdentifiers.get(plis.get(rhsAttr).getAttribute()).toString());
+		}
+
+		//if (lhsIdentifiers.contains("hospital_dirty.csv.state") && lhsIdentifiers.contains("hospital_dirty.csv.measure_code") && lhsIndex.size() == 2)
+		//	System.out.println();
+
+
+		int rhsSize = rhs.cardinality();
+		BitSet refinedRhs = (BitSet) rhs.clone();
+
+		// Build mappings for the rhs attributes.
+		int[] rhsAttrId2Index = new int[compressedRecords[0].length];
+		int[] rhsAttrIndex2Id = new int[rhsSize];
+		int index = 0;
+		for (int rhsAttr = refinedRhs.nextSetBit(0); rhsAttr >= 0;
+			 rhsAttr = refinedRhs.nextSetBit(rhsAttr + 1)) {
+			rhsAttrId2Index[rhsAttr] = index;
+			rhsAttrIndex2Id[index] = rhsAttr;
+			index++;
+		}
+
+		// Counter for violations per rhs attribute.
+		int[] violationCounts = new int[compressedRecords[0].length];
+		// Map to store violation details (e.g., record ids as strings) per each candidate rhs attribute.
+		Map<Integer, List<String>> violationDetailsMap = new HashMap<>();
+
+		// Iterate over clusters.
+		for (IntArrayList cluster : this.clusters) {
+			// Group records by their lhs “subcluster” based on the candidate lhs attributes.
+			Object2ObjectOpenHashMap<ClusterIdentifier, ClusterIdentifierWithRecord> subClusters =
+					new Object2ObjectOpenHashMap<>(cluster.size());
+			for (int recordId : cluster) {
+				ClusterIdentifier subClusterIdentifier = this.buildClusterIdentifier(lhs, lhs.cardinality(), compressedRecords[recordId]);
+				if (subClusterIdentifier == null)
+					continue;
+				if (subClusters.containsKey(subClusterIdentifier)) {
+					ClusterIdentifierWithRecord representative = subClusters.get(subClusterIdentifier);
+					// For every rhs attribute in the candidate, update violation counts
+					// and store the corresponding recordId as a violation detail.
+					for (int rhsAttr = refinedRhs.nextSetBit(0); rhsAttr >= 0;
+						 rhsAttr = refinedRhs.nextSetBit(rhsAttr + 1)) {
+						int currentRhsValue = compressedRecords[recordId][rhsAttr];
+						int repRhsValue = representative.get(rhsAttrId2Index[rhsAttr]);
+						if (currentRhsValue != repRhsValue) { //currentRhsValue != -1 &&
+							violationCounts[rhsAttr]++;
+							violationDetailsMap
+									.computeIfAbsent(rhsAttr, k -> new ArrayList<>())
+									.add(String.valueOf(recordId));
+							// Optionally, record a suggestion.
+							comparisonSuggestions.add(new IntegerPair(recordId, representative.getRecord()));
+						}
+					}
+				} else {
+					// First record in the subcluster becomes the representative.
+					int[] rhsValues = new int[rhsSize];
+					for (int i = 0; i < rhsSize; i++) {
+						rhsValues[i] = compressedRecords[recordId][rhsAttrIndex2Id[i]];
+					}
+					subClusters.put(subClusterIdentifier, new ClusterIdentifierWithRecord(rhsValues, recordId));
+				}
+			}
+		}
+
+		// Process each candidate rhs attribute:
+		// - Remove those that exceed the allowed maxViolations.
+		// - Update the scoreList for the rest.
+		// - Write the violation details for each remaining candidate FD.
+		for (int rhsAttr = refinedRhs.nextSetBit(0); rhsAttr >= 0;
+			 rhsAttr = refinedRhs.nextSetBit(rhsAttr + 1)) {
+			if (violationCounts[rhsAttr] > maxViolations) {
+				refinedRhs.clear(rhsAttr);
+			} else {
+				scoreList[rhsAttr] = 1f - ((float) violationCounts[rhsAttr] / (float) numRecords);
+				List<String> violationDetails = violationDetailsMap.get(rhsAttr);
+				if (violationDetails != null) {
+					// For logging, we use the composite LHS representation (via lhs.toString())
+					// and the candidate rhs attribute id as its string value.
+					storeViolationDetails(violationDetails, lhsIndex, plis.get(rhsAttr).getAttribute(), lhsIdentifiers, columnIdentifiers.get(plis.get(rhsAttr).getAttribute()).toString());
+				}
+			}
+		}
+		return refinedRhs;
+	}
+
+
+	public BitSet refinesApproximately2(int[][] compressedRecords, BitSet lhs, BitSet rhs,
 									   List<IntegerPair> comparisonSuggestions, int maxViolations, Float[] scoreList, int numRecords) {
 		int rhsSize = rhs.cardinality();
 		BitSet refinedRhs = (BitSet) rhs.clone();
@@ -431,7 +557,7 @@ public class PositionListIndex {
 					for (int rhsAttr = refinedRhs.nextSetBit(0); rhsAttr >= 0; rhsAttr = refinedRhs.nextSetBit(rhsAttr + 1)) {
 						int currentRhsValue = compressedRecords[recordId][rhsAttr];
 						int repRhsValue = representative.get(rhsAttrId2Index[rhsAttr]);
-						if (currentRhsValue != -1 && currentRhsValue != repRhsValue) {
+						if (currentRhsValue != repRhsValue) { //currentRhsValue != -1 &&
 							violationCounts[rhsAttr]++;
 							// Optionally, record a suggestion.
 							comparisonSuggestions.add(new IntegerPair(recordId, representative.getRecord()));
@@ -898,5 +1024,4 @@ public BitSet refines(int[][] compressedRecords, BitSet lhs, BitSet rhs, List<In
 
 		return setClusters;
 	}
-
 }

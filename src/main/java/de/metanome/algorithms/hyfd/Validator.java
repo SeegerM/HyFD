@@ -157,7 +157,7 @@ public class Validator {
 				for (int rhsAttr = rhs.nextSetBit(0); rhsAttr >= 0; rhsAttr = rhs.nextSetBit(rhsAttr + 1)) {
 					//if (!Validator.this.plis.get(rhsAttr).isConstant(Validator.this.numRecords)) {
 					AtomicInteger violations = new AtomicInteger(0);
-					if (!Validator.this.plis.get(rhsAttr).isApproximatelyConstant(Validator.this.numRecords, Validator.this.maxViolations, violations)) {
+					if (!Validator.this.plis.get(rhsAttr).isApproximatelyConstant(Validator.this.numRecords, Validator.this.maxViolations, violations, columnIdentifiers.get(plis.get(rhsAttr).getAttribute()).toString())) {
 						element.removeFd(rhsAttr);
 						result.invalidFDs.add(new FD(lhs, rhsAttr));
 					} else {
@@ -184,11 +184,11 @@ public class Validator {
 			else {
 				// Check if lhs from plis plus remaining inverted plis refines rhs
 				int firstLhsAttr = lhs.nextSetBit(0);
-				
-				lhs.clear(firstLhsAttr);
+				BitSet clone = (BitSet) lhs.clone();
+				//lhs.clear(firstLhsAttr);
 				Float[] scoreList = new Float[rhs.size()];
-				BitSet validRhs = Validator.this.plis.get(firstLhsAttr).refinesApproximately(Validator.this.compressedRecords, lhs, rhs, result.comparisonSuggestions, Validator.this.maxViolations, scoreList, Validator.this.numRecords);
-				lhs.set(firstLhsAttr);
+				BitSet validRhs = Validator.this.plis.get(firstLhsAttr).refinesApproximately(Validator.this.compressedRecords, lhs, rhs, result.comparisonSuggestions, Validator.this.maxViolations, scoreList, Validator.this.numRecords, plis ,columnIdentifiers, clone);
+				//lhs.set(firstLhsAttr);
 				
 				result.intersections++;
 				
