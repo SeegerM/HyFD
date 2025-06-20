@@ -39,7 +39,7 @@ import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 public class HyFD implements RelaxedFunctionalDependencyAlgorithm, BooleanParameterAlgorithm, IntegerParameterAlgorithm, StringParameterAlgorithm, RelationalInputParameterAlgorithm {
 
 	public enum Identifier {
-		INPUT_GENERATOR, THRESHOLD, NULL_EQUALS_NULL, VALIDATE_PARALLEL, ENABLE_MEMORY_GUARDIAN, MAX_DETERMINANT_SIZE, INPUT_ROW_LIMIT
+		WRITE_VIOLATIONS, INPUT_GENERATOR, THRESHOLD, NULL_EQUALS_NULL, VALIDATE_PARALLEL, ENABLE_MEMORY_GUARDIAN, MAX_DETERMINANT_SIZE, INPUT_ROW_LIMIT
 	};
 
 	private RelationalInputGenerator inputGenerator = null;
@@ -59,6 +59,7 @@ public class HyFD implements RelaxedFunctionalDependencyAlgorithm, BooleanParame
 	private int numAttributes;
 
 	private float threshold = 1.0f;
+	private boolean writeViolations = false;
 
 	@Override
 	public String getAuthors() {
@@ -263,20 +264,35 @@ public class HyFD implements RelaxedFunctionalDependencyAlgorithm, BooleanParame
 		// TODO: implement parallel sampling
 		int maxViolations = (int) (numRecords - (numRecords * threshold));
 		Logger.getInstance().writeln("Max Violations: " + maxViolations);
+		//System.out.println(maxViolations);
 
-		//Sampler sampler = new Sampler(negCover, posCover, maxViolations, compressedRecords, plis, this.efficiencyThreshold, this.valueComparator, this.memoryGuardian);
-		//Inductor inductor = new Inductor(negCover, posCover, this.memoryGuardian);
-		Validator validator = new Validator(negCover, posCover, maxViolations, numRecords, compressedRecords, plis, this.efficiencyThreshold, this.validateParallel, this.memoryGuardian, this.buildColumnIdentifiers());
+		Sampler sampler = new Sampler(negCover, posCover, maxViolations, compressedRecords, plis, this.efficiencyThreshold, this.valueComparator, this.memoryGuardian);
+		Inductor inductor = new Inductor(negCover, posCover, this.memoryGuardian);
+		Validator validator = new Validator(negCover, posCover, maxViolations, numRecords, compressedRecords, plis, this.efficiencyThreshold, this.validateParallel, this.memoryGuardian, this.buildColumnIdentifiers(), writeViolations);
 		
 		List<IntegerPair> comparisonSuggestions = new ArrayList<>();
+		//long sampleTime = 0;
+		//long inductorTime = 0;
+		//long validationTime = 0;
 		do {
-			//FDList newNonFds = sampler.enrichNegativeCover(comparisonSuggestions);
-			//inductor.updatePositiveCover(newNonFds);
+			//long startTime = System.currentTimeMillis();
+			//System.out.println(comparisonSuggestions.size());
+			FDList newNonFds = sampler.enrichNegativeCover(comparisonSuggestions);
+			//System.out.println(newNonFds.size());
+			//sampleTime += System.currentTimeMillis() - startTime;
+			//startTime = System.currentTimeMillis();
+			inductor.updatePositiveCover(newNonFds);
+			//inductorTime += System.currentTimeMillis() - startTime;
+			//startTime = System.currentTimeMillis();
 			comparisonSuggestions = validator.validatePositiveCover();
+			//validationTime += System.currentTimeMillis() - startTime;
 		}
 		while (comparisonSuggestions != null);
 		negCover = null;
-		
+		//System.out.println("SamplerTime: " + sampleTime + " ms");
+		//System.out.println("InductorTime: " + inductorTime + " ms");
+		//System.out.println("ValidationTime: " + validationTime + " ms");
+
 		// Output all valid FDs
 		Logger.getInstance().writeln("Translating FD-tree into result format ...");
 		

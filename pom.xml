@@ -3,7 +3,7 @@
 
   <groupId>de.metanome.algorithms.hyfd</groupId>
   <artifactId>HyFD</artifactId>
-  <version>${metanome.version}</version>
+  <version>${partial.version}</version>
   <packaging>jar</packaging>
 
   <name>HyFD</name>
@@ -11,6 +11,7 @@
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <metanome.version>1.2-SNAPSHOT</metanome.version>
+    <partial.version>1.2-Partial</partial.version>
   </properties>
 
   <dependencies>
@@ -49,7 +50,6 @@
       <groupId>de.metanome</groupId>
       <artifactId>backend</artifactId>
       <version>${metanome.version}</version>
-      <scope>test</scope>
     </dependency>
 
     <dependency>

@@ -36,8 +36,9 @@ public class Validator {
 	private int maxViolations;
 	ObjectArrayList<ColumnIdentifier> columnIdentifiers;
 	private int level = 0;
+	private boolean writeViolations;
 
-	public Validator(FDSet negCover, FDTree posCover, int maxViolations, int numRecords, int[][] compressedRecords, List<PositionListIndex> plis, float efficiencyThreshold, boolean parallel, MemoryGuardian memoryGuardian, ObjectArrayList<ColumnIdentifier> columnIdentifiers) {
+	public Validator(FDSet negCover, FDTree posCover, int maxViolations, int numRecords, int[][] compressedRecords, List<PositionListIndex> plis, float efficiencyThreshold, boolean parallel, MemoryGuardian memoryGuardian, ObjectArrayList<ColumnIdentifier> columnIdentifiers, boolean writeViolations) {
 		this.negCover = negCover;
 		this.posCover = posCover;
 		this.numRecords = numRecords;
@@ -47,6 +48,7 @@ public class Validator {
 		this.memoryGuardian = memoryGuardian;
 		this.maxViolations = maxViolations;
 		this.columnIdentifiers = columnIdentifiers;
+		this.writeViolations = writeViolations;
 		
 		if (parallel) {
 			int numThreads = Runtime.getRuntime().availableProcessors();
@@ -157,7 +159,7 @@ public class Validator {
 				for (int rhsAttr = rhs.nextSetBit(0); rhsAttr >= 0; rhsAttr = rhs.nextSetBit(rhsAttr + 1)) {
 					//if (!Validator.this.plis.get(rhsAttr).isConstant(Validator.this.numRecords)) {
 					AtomicInteger violations = new AtomicInteger(0);
-					if (!Validator.this.plis.get(rhsAttr).isApproximatelyConstant(Validator.this.numRecords, Validator.this.maxViolations, violations, columnIdentifiers.get(plis.get(rhsAttr).getAttribute()).toString())) {
+					if (!Validator.this.plis.get(rhsAttr).isApproximatelyConstant(Validator.this.numRecords, Validator.this.maxViolations, violations, columnIdentifiers.get(plis.get(rhsAttr).getAttribute()).toString(), writeViolations)) {
 						element.removeFd(rhsAttr);
 						result.invalidFDs.add(new FD(lhs, rhsAttr));
 					} else {
@@ -172,7 +174,7 @@ public class Validator {
 				for (int rhsAttr = rhs.nextSetBit(0); rhsAttr >= 0; rhsAttr = rhs.nextSetBit(rhsAttr + 1)) {
 					//if (!Validator.this.plis.get(lhsAttribute).refinesApproximately(Validator.this.compressedRecords, rhsAttr, 0.95d, plis.get(lhsAttribute).attribute, Validator.this.numRecords)) {
 					AtomicInteger violations = new AtomicInteger(0);
-					if (!Validator.this.plis.get(lhsAttribute).refinesApproximately(Validator.this.compressedRecords, rhsAttr, violations, Validator.this.maxViolations, plis.get(rhsAttr).getAttribute(), plis.get(lhsAttribute).getAttribute(), columnIdentifiers.get(plis.get(lhsAttribute).getAttribute()).toString(), columnIdentifiers.get(plis.get(rhsAttr).attribute).toString())) {
+					if (!Validator.this.plis.get(lhsAttribute).refinesApproximately(Validator.this.compressedRecords, rhsAttr, violations, Validator.this.maxViolations, plis.get(rhsAttr).getAttribute(), plis.get(lhsAttribute).getAttribute(), columnIdentifiers.get(plis.get(lhsAttribute).getAttribute()).toString(), columnIdentifiers.get(plis.get(rhsAttr).attribute).toString(),writeViolations)) {
 						element.removeFd(rhsAttr);
 						result.invalidFDs.add(new FD(lhs, rhsAttr));
 					} else {
@@ -187,7 +189,7 @@ public class Validator {
 				BitSet clone = (BitSet) lhs.clone();
 				//lhs.clear(firstLhsAttr);
 				Float[] scoreList = new Float[rhs.size()];
-				BitSet validRhs = Validator.this.plis.get(firstLhsAttr).refinesApproximately(Validator.this.compressedRecords, lhs, rhs, result.comparisonSuggestions, Validator.this.maxViolations, scoreList, Validator.this.numRecords, plis ,columnIdentifiers, clone);
+				BitSet validRhs = Validator.this.plis.get(firstLhsAttr).refinesApproximately(Validator.this.compressedRecords, lhs, rhs, result.comparisonSuggestions, Validator.this.maxViolations, scoreList, Validator.this.numRecords, plis ,columnIdentifiers, clone, writeViolations);
 				//lhs.set(firstLhsAttr);
 				
 				result.intersections++;

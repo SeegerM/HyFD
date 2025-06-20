@@ -17,11 +17,7 @@
 package de.metanome.algorithms.hyfd.structures;
 
 import de.metanome.algorithm_integration.ColumnIdentifier;
-import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
-import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
-import it.unimi.dsi.fastutil.ints.IntArrayList;
-import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
-import it.unimi.dsi.fastutil.ints.IntSet;
+import it.unimi.dsi.fastutil.ints.*;
 import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 
@@ -97,33 +93,37 @@ public class PositionListIndex {
 		return false;
 	}
 
-	public boolean isApproximatelyConstant(int numRecords, int maxViolations, AtomicInteger violations, String rhsName) {
+	public boolean isApproximatelyConstant(int numRecords, int maxViolations, AtomicInteger violations, String rhsName, boolean writeViolations) {
 		if (numRecords <= 1) {
 			return true;
 		}
 		int maxFrequency = 0;
+		int numOverall = 0;
 		IntArrayList dominantCluster = null;
 		for (IntArrayList cluster : this.clusters) {
 			if (cluster.size() > maxFrequency) {
 				maxFrequency = cluster.size();
 				dominantCluster = cluster;
+				numOverall += maxFrequency;
 			}
+			if (numOverall-maxFrequency > maxViolations)
+				return false;
 		}
 
 		int violationCount = numRecords - maxFrequency;
 
-		List<String> violationDetails = new ArrayList<>();
-		for (IntArrayList cluster : this.clusters) {
-			if (cluster != dominantCluster) {
-				for (int i = 0; i < cluster.size(); i++) {
-					violationDetails.add(String.valueOf(cluster.getInt(i)));
+		if(writeViolations){
+			List<String> violationDetails = new ArrayList<>();
+			for (IntArrayList cluster : this.clusters) {
+				if (cluster != dominantCluster) {
+					for (int i = 0; i < cluster.size(); i++) {
+						violationDetails.add(String.valueOf(cluster.getInt(i)));
+					}
 				}
 			}
+			storeViolationDetails(violationDetails, -1, attribute, "[]", rhsName);
 		}
-
 		violations.set(violationCount);
-
-		storeViolationDetails(violationDetails, -1, attribute, "[]", rhsName);
 
 		return violationCount <= maxViolations;
 	}
@@ -300,7 +300,7 @@ public class PositionListIndex {
 */
 
 	public boolean refinesApproximately(int[][] compressedRecords, int rhsAttr,
-										AtomicInteger violations, int maxViolations, int rhsAttr2, int lhsAttr, String lhs, String rhs) {
+										AtomicInteger violations, int maxViolations, int rhsAttr2, int lhsAttr, String lhs, String rhs, boolean writeViolations) {
 		int totalViolations = 0;
 		// List to store details about each violation.
 		List<String> violationDetails = new ArrayList<>();
@@ -310,14 +310,15 @@ public class PositionListIndex {
 
 		// Process each cluster to count violations and record details
 		for (IntArrayList cluster : this.clusters) {
-			totalViolations += countClusterInValidity2(compressedRecords, rhsAttr, cluster, lhsAttr, violationDetails);
+			totalViolations += countClusterInValidity2(compressedRecords, rhsAttr, cluster, lhsAttr, violationDetails,writeViolations);
 			if (totalViolations > maxViolations)
 				return false;
 		}
 		// Update the AtomicInteger with the total violation count.
 		violations.set(totalViolations);
 
-		storeViolationDetails(violationDetails, lhsAttr, rhsAttr2, lhs, rhs);
+		if (writeViolations)
+			storeViolationDetails(violationDetails, lhsAttr, rhsAttr2, lhs, rhs);
 
 		return true;
 	}
@@ -349,10 +350,76 @@ public class PositionListIndex {
 		return invalid;
 	}
 
-	public int countClusterInValidity2(int[][] compressedRecords, int rhsAttr,
-										 IntArrayList cluster, int lhsAttr, List<String> violationDetails) {
-		Map<Integer, Integer> frequencyMap = new HashMap<>();
+	public int countClusterInValidity2(
+			int[][] compressedRecords,
+			int rhsAttr,
+			IntArrayList cluster,
+			int lhsAttr,
+			List<String> violationDetails,
+			boolean writeViolations) {
 
+			// 1) Primitive map, no boxing, default 0
+		Int2IntOpenHashMap freq = new Int2IntOpenHashMap();
+		freq.defaultReturnValue(0);
+
+		int reference = -1;
+		int maxCount  = 0;
+
+		// Cache for faster loops
+		final int[] clusterArr = cluster.elements();
+		final int   size       = cluster.size();
+		final int[][] cr       = compressedRecords;
+
+		// --- Pass 1: count and track top value in one go ---
+		for (int i = 0; i < size; i++) {
+			int recId = clusterArr[i];
+			int v     = cr[recId][rhsAttr];
+			if (v != -1) {
+				// fastutil’s addTo returns previous value, so +1 gives new count
+				int cnt = freq.addTo(v, 1) + 1;
+				if (cnt > maxCount) {
+					maxCount  = cnt;
+					reference = v;
+				}
+			}
+		}
+
+		// If we never saw a valid value, reference stays -1
+		if (reference == -1) {
+			if (writeViolations) {
+				// everything except the first one is “invalid” by your old logic
+				for (int i = 1; i < size; i++) {
+					violationDetails.add(String.valueOf(clusterArr[i]));
+				}
+			}
+			return size - 1;
+		}
+
+		// --- Pass 2: count all != reference and collect details if needed ---
+		int invalid = 0;
+		if (writeViolations) {
+			for (int i = 0; i < size; i++) {
+				int recId = clusterArr[i];
+				if (cr[recId][rhsAttr] != reference) {
+					invalid++;
+					violationDetails.add(String.valueOf(recId));
+				}
+			}
+		} else {
+			for (int i = 0; i < size; i++) {
+				if (cr[clusterArr[i]][rhsAttr] != reference) {
+					invalid++;
+				}
+			}
+		}
+
+		return invalid;
+	}
+
+
+	public int countClusterInValidity3(int[][] compressedRecords, int rhsAttr,
+										 IntArrayList cluster, int lhsAttr, List<String> violationDetails, boolean writeViolations) {
+		Int2IntArrayMap frequencyMap = new Int2IntArrayMap();
 		// Step 1: Count frequency of each value in the RHS attribute within the cluster
 		for (int recordId : cluster) {
 			int value = compressedRecords[recordId][rhsAttr];
@@ -362,8 +429,9 @@ public class PositionListIndex {
 		}
 
 		if (frequencyMap.isEmpty()) { //Special Case
-			for (int i = 1; i < cluster.size(); i++)
-				violationDetails.add(String.valueOf(cluster.getInt(i)));
+			if (writeViolations)
+				for (int i = 1; i < cluster.size(); i++)
+					violationDetails.add(String.valueOf(cluster.getInt(i)));
 			return cluster.size()-1; // No valid reference values
 		}
 
@@ -383,7 +451,8 @@ public class PositionListIndex {
 			int value = compressedRecords[recordId][rhsAttr];
 			if (value != reference) {
 				invalid++;
-				violationDetails.add(String.valueOf(recordId));
+				if (writeViolations)
+					violationDetails.add(String.valueOf(recordId));
 			}
 		}
 
@@ -430,9 +499,10 @@ public class PositionListIndex {
 		return true;
 	}
 
+
 	public BitSet refinesApproximately(int[][] compressedRecords, BitSet lhs, BitSet rhs,
 									   List<IntegerPair> comparisonSuggestions, int maxViolations,
-									   Float[] scoreList, int numRecords, List<PositionListIndex> plis, ObjectArrayList<ColumnIdentifier> columnIdentifiers, BitSet clone) {
+									   Float[] scoreList, int numRecords, List<PositionListIndex> plis, ObjectArrayList<ColumnIdentifier> columnIdentifiers, BitSet clone, boolean writeViolations) {
 
 		List<Integer> lhsIndex = new ArrayList<>();
 		List<String> lhsIdentifiers = new ArrayList<>();
@@ -484,9 +554,10 @@ public class PositionListIndex {
 						int repRhsValue = representative.get(rhsAttrId2Index[rhsAttr]);
 						if (currentRhsValue != repRhsValue) { //currentRhsValue != -1 &&
 							violationCounts[rhsAttr]++;
-							violationDetailsMap
-									.computeIfAbsent(rhsAttr, k -> new ArrayList<>())
-									.add(String.valueOf(recordId));
+							if (writeViolations)
+								violationDetailsMap
+										.computeIfAbsent(rhsAttr, k -> new ArrayList<>())
+										.add(String.valueOf(recordId));
 							// Optionally, record a suggestion.
 							comparisonSuggestions.add(new IntegerPair(recordId, representative.getRecord()));
 						}
@@ -512,11 +583,13 @@ public class PositionListIndex {
 				refinedRhs.clear(rhsAttr);
 			} else {
 				scoreList[rhsAttr] = 1f - ((float) violationCounts[rhsAttr] / (float) numRecords);
-				List<String> violationDetails = violationDetailsMap.get(rhsAttr);
-				if (violationDetails != null) {
-					// For logging, we use the composite LHS representation (via lhs.toString())
-					// and the candidate rhs attribute id as its string value.
-					storeViolationDetails(violationDetails, lhsIndex, plis.get(rhsAttr).getAttribute(), lhsIdentifiers, columnIdentifiers.get(plis.get(rhsAttr).getAttribute()).toString());
+				if (writeViolations) {
+					List<String> violationDetails = violationDetailsMap.get(rhsAttr);
+					if (violationDetails != null) {
+						// For logging, we use the composite LHS representation (via lhs.toString())
+						// and the candidate rhs attribute id as its string value.
+						storeViolationDetails(violationDetails, lhsIndex, plis.get(rhsAttr).getAttribute(), lhsIdentifiers, columnIdentifiers.get(plis.get(rhsAttr).getAttribute()).toString());
+					}
 				}
 			}
 		}

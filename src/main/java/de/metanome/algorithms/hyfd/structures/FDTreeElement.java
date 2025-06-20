@@ -612,7 +612,7 @@ public class FDTreeElement {
 			
 			ColumnCombination colCombination = new ColumnCombination(columns);
 			int rhsId = plis.get(rhs).getAttribute(); // Here we translate the column rhs back to the real column rhs before the sorting
-			float localScore = lhs.isEmpty() ? 1f : score[rhs];
+			float localScore = (lhs.isEmpty() || score[rhs] == null) ? 1f : score[rhs];
 			RelaxedFunctionalDependency fdResult = new RelaxedFunctionalDependency(colCombination, columnIdentifiers.get(rhsId), (double) localScore);
 			resultReceiver.receiveResult(fdResult);
 			numFDs++;

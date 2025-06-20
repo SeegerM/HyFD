@@ -4,7 +4,7 @@ import java.util.Arrays;
 import java.util.BitSet;
 
 public class BitSetKey {
-    private final byte[] bytes;
+    private byte[] bytes;
 
     public BitSetKey(BitSet bitSet) {
         this.bytes = bitSet.toByteArray();
@@ -23,5 +23,9 @@ public class BitSetKey {
     @Override
     public int hashCode() {
         return Arrays.hashCode(bytes);
+    }
+
+    public void setBitSet(BitSet equalAttrs) {
+        bytes = getBitSet().toByteArray();
     }
 }
