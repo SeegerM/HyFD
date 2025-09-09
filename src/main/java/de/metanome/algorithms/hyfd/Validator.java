@@ -37,7 +37,7 @@ public class Validator {
 	ObjectArrayList<ColumnIdentifier> columnIdentifiers;
 	private int level = 0;
 
-	public Validator(FDSet negCover, FDTree posCover, int maxViolations, int numRecords, int[][] compressedRecords, List<PositionListIndex> plis, float efficiencyThreshold, boolean parallel, MemoryGuardian memoryGuardian, ObjectArrayList<ColumnIdentifier> columnIdentifiers) {
+	public Validator(FDSet negCover, FDTree posCover, int maxViolations, int numRecords, int[][] compressedRecords, List<PositionListIndex> plis, long[] timestamps, float efficiencyThreshold, boolean parallel, MemoryGuardian memoryGuardian, ObjectArrayList<ColumnIdentifier> columnIdentifiers) {
 		this.negCover = negCover;
 		this.posCover = posCover;
 		this.numRecords = numRecords;

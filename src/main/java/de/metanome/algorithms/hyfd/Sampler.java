@@ -22,7 +22,7 @@ public class Sampler {
 	private MemoryGuardian memoryGuardian;
 	private int maxViolations;
 
-	public Sampler(FDSet negCover, FDTree posCover, int maxViolations, int[][] compressedRecords, List<PositionListIndex> plis, float efficiencyThreshold, ValueComparator valueComparator, MemoryGuardian memoryGuardian) {
+	public Sampler(FDSet negCover, FDTree posCover, int maxViolations, int[][] compressedRecords, List<PositionListIndex> plis,  long[] timestamps, float efficiencyThreshold, ValueComparator valueComparator, MemoryGuardian memoryGuardian) {
 		this.negCover = negCover;
 		this.posCover = posCover;
 		this.compressedRecords = compressedRecords;

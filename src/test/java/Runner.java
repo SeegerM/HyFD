@@ -21,7 +21,7 @@ public class Runner {
     static String path = "C://Users/MarcianSeeger/Documents/HyFD/data";
     public static void main(String[] args) {
         File folder = new File(Runner.path);
-        File[] csvFiles = folder.listFiles((dir, name) -> name.equalsIgnoreCase("hospital_dirty.csv"));
+        File[] csvFiles = folder.listFiles((dir, name) -> name.equalsIgnoreCase("hospital_dirty.csv")); //"hospital_dirty.csv"
 
         // Extract file names from the CSV files.
         String[] fileNames = new String[csvFiles.length];
@@ -29,259 +29,261 @@ public class Runner {
             fileNames[i] = csvFiles[i].getName();
         }
         System.out.println("Threshold,F1BestLocal,F1Best,F1VoteLocal,F1Vote");
-        for (int i = 10; i >= 1; i--) {
-            double value = i / 100.0;
-            System.out.print("" + value);
+        double value = 0.8;
+        System.out.print("" + value);
 
-            //System.out.println("Start Execution");
-            // Execute HyFD on all found CSV files.
-            List<Result> results = executeHyFD(value, fileNames);
+        //System.out.println("Start Execution");
+        // Execute HyFD on all found CSV files.
+        List<Result> results = executeHyFD(value, fileNames);
 
-            //for (Result printR : results){
-            //    System.out.println(printR);
-            //}
-            //System.out.println("----------------------");
-            //System.out.println("Start GPDEP Score Execution");
-            List<Pair<RelaxedFunctionalDependency, PdepTuple>> result = MetadataUtils.getPdeps(results, csvFiles);
+        //for (Result printR : results){
+        //    System.out.println(printR);
+        //}
 
-            result.sort(Comparator.comparingDouble(pair -> pair.getSecond().gpdep));
+        //System.out.println("----------------------");
+        //System.out.println("Start GPDEP Score Execution");
+        List<Pair<RelaxedFunctionalDependency, PdepTuple>> result = MetadataUtils.getPdeps(results, csvFiles);
 
-            Map<String, List<Double>> gpdepByColumn = new HashMap<>();
+        //for (Pair<RelaxedFunctionalDependency, PdepTuple> pair : result){
+        //    System.out.println(pair.getFirst() + ": " + pair.getSecond().gpdep);
+        //}
+        result.sort(Comparator.comparingDouble(pair -> pair.getSecond().gpdep));
 
-            double totalGpdep = 0.0;
-            int totalCount = 0;
+        Map<String, List<Double>> gpdepByColumn = new HashMap<>();
+
+        double totalGpdep = 0.0;
+        int totalCount = 0;
 
 
-            Map<Integer, String> indexToName = new HashMap<>();
-            Map<String, List<Integer>> violations = readViolationMap();
-            Map<RelaxedFunctionalDependency, List<Integer>> acceptedViolations = new HashMap<>();
-            Map<String, List<Integer>> newViolations = violations.keySet().stream()
-                    .collect(Collectors.toMap(
-                            k -> {
-                                String parsedFDString = parseFd(k, indexToName);
-                                return parsedFDString;
-                            },
-                            k -> violations.get(k)
-                    ));
+        Map<Integer, String> indexToName = new HashMap<>();
+        Map<String, List<Integer>> violations = readViolationMap();
+        Map<RelaxedFunctionalDependency, List<Integer>> acceptedViolations = new HashMap<>();
+        Map<String, List<Integer>> newViolations = violations.keySet().stream()
+                .collect(Collectors.toMap(
+                        k -> {
+                            String parsedFDString = parseFd(k, indexToName);
+                            return parsedFDString;
+                        },
+                        k -> violations.get(k)
+                ));
 
-            for (Pair<RelaxedFunctionalDependency, PdepTuple> pair : result) {
-                //System.out.println("FD: " + pair.getFirst() + ", pdep: " + pair.getSecond().pdep + ", gpdep: " + pair.getSecond().gpdep);
-                RelaxedFunctionalDependency fd = pair.getFirst();
-                PdepTuple scores = pair.getSecond();
+        for (Pair<RelaxedFunctionalDependency, PdepTuple> pair : result) {
+            //System.out.println("FD: " + pair.getFirst() + ", pdep: " + pair.getSecond().pdep + ", gpdep: " + pair.getSecond().gpdep);
+            RelaxedFunctionalDependency fd = pair.getFirst();
+            PdepTuple scores = pair.getSecond();
 
-                String dependent = fd.getDependant().getColumnIdentifier();
-                //System.out.println(fd.getDeterminant() + "->" + fd.getDependant() + " #" + scores.gpdep);
-                if (scores.gpdep > 0.5d){
-                    gpdepByColumn
-                            .computeIfAbsent(dependent, k -> new ArrayList<>())
-                            .add(scores.gpdep);
-                    totalGpdep += scores.gpdep;
-                    totalCount++;
-                    //if (fd.toString().contains("[hospital_dirty.csv.measure_code, hospital_dirty.csv.state]->hospital_dirty.csv.state_average"))
-                    //    System.out.println("");
-                    String key = pair.getFirst().getDeterminant().toString().replace("[", "").replace("]","") + "->" + pair.getFirst().getDependant();
-                    if (!newViolations.containsKey(key)){
-                    //    if (!pair.getFirst().getDeterminant().getColumnIdentifiers().isEmpty())
-                    //        System.out.println("Not in the map but as a violation! " + fd);
-                        key = "[]" + "->" + pair.getFirst().getDependant();
-                    //    if (!newViolations.containsKey(key))
-                     //       System.out.println("");
-                    }
-                    fd.setMeasure(scores.gpdep);
-                    acceptedViolations.put(fd, newViolations.get(key));
+            String dependent = fd.getDependant().getColumnIdentifier();
+            System.out.println(fd.getDeterminant() + "->" + fd.getDependant() + " #" + scores.gpdep);
+            if (scores.gpdep > 0.5d){
+                gpdepByColumn
+                        .computeIfAbsent(dependent, k -> new ArrayList<>())
+                        .add(scores.gpdep);
+                totalGpdep += scores.gpdep;
+                totalCount++;
+                //if (fd.toString().contains("[hospital_dirty.csv.measure_code, hospital_dirty.csv.state]->hospital_dirty.csv.state_average"))
+                //    System.out.println("");
+                String key = pair.getFirst().getDeterminant().toString().replace("[", "").replace("]","") + "->" + pair.getFirst().getDependant();
+                if (!newViolations.containsKey(key)){
+                //    if (!pair.getFirst().getDeterminant().getColumnIdentifiers().isEmpty())
+                //        System.out.println("Not in the map but as a violation! " + fd);
+                    key = "[]" + "->" + pair.getFirst().getDependant();
+                //    if (!newViolations.containsKey(key))
+                 //       System.out.println("");
                 }
+                fd.setMeasure(scores.gpdep);
+                acceptedViolations.put(fd, newViolations.get(key));
             }
-
-            //System.out.println("\nAverage gpdep per dependent column:");
-            for (Map.Entry<String, List<Double>> entry : gpdepByColumn.entrySet()) {
-                String column = entry.getKey();
-                List<Double> gpdepList = entry.getValue();
-
-                double sum = 0.0;
-                for (double gpdep : gpdepList) {
-                    sum += gpdep;
-                }
-                double average = gpdepList.isEmpty() ? 1.0 : sum / gpdepList.size();
-
-                //System.out.printf("Column: %-20s  Avg gpdep: %.4f%n", column, average);
-            }
-
-            double overallAverage = totalCount == 0 ? 0.0 : totalGpdep / totalCount;
-            //System.out.printf("\nOverall average gpdep: %.4f%n", overallAverage);
-            //System.out.println();
-
-            Map<String, RelaxedFunctionalDependency> bestPerRhs = new HashMap<>();
-
-            for (RelaxedFunctionalDependency rfd : acceptedViolations.keySet()) {
-                String rhs = rfd.getDependant().toString();
-                bestPerRhs.merge(rhs, rfd, (existing, current) ->
-                        current.getMeasure() > existing.getMeasure() ? current : existing
-                );
-            }
-
-            Map<String, List<RelaxedFunctionalDependency>> rfdsPerRhs = new HashMap<>();
-
-            for (RelaxedFunctionalDependency rfd : acceptedViolations.keySet()) {
-                String rhs = rfd.getDependant().toString();
-                rfdsPerRhs.computeIfAbsent(rhs, k -> new ArrayList<>()).add(rfd);
-            }
-
-            int totalTP = 0;
-            int totalFP = 0;
-            int totalFN = 0;
-
-            Map<String, List<List<Integer>>> violationsPerAttributeInFile = readXIndicesColumnWise(csvFiles);
-            for (Map.Entry<String, RelaxedFunctionalDependency> entry : bestPerRhs.entrySet()) {
-                String rhs = entry.getKey();
-                RelaxedFunctionalDependency bestRfd = entry.getValue();
-                if (entry.getValue().getDeterminant().getColumnIdentifiers().isEmpty())
-                    continue;
-                Integer indexOfRhs = getIndex(indexToName, rhs);
-                List<Integer> expectedViolations = violationsPerAttributeInFile.get(fileNames[0]).get(indexOfRhs);
-                List<Integer> actualViolations = acceptedViolations.get(bestRfd);
-                if (actualViolations == null) {
-                    actualViolations = new ArrayList<>();
-                }
-                Set<Integer> expectedSet = new HashSet<>(expectedViolations);
-                Set<Integer> actualSet = new HashSet<>(actualViolations);
-
-                Set<Integer> tpSet = new HashSet<>(actualSet);
-                tpSet.retainAll(expectedSet);
-
-                int tp = tpSet.size();
-                int fp = actualSet.size() - tp;
-                int fn = expectedSet.size() - tp;
-
-                totalTP += tp;
-                totalFP += fp;
-                totalFN += fn;
-
-                double f1 = computeF1(expectedViolations, actualViolations);
-                //System.out.printf("%-70s (F1): %.3f, GPDEP: %.3f%n", bestRfd.getDeterminant() + "->" + bestRfd.getDependant(), f1, bestRfd.getMeasure());
-            }
-
-
-            double precision = totalTP + totalFP == 0 ? 0 : (double) totalTP / (totalTP + totalFP);
-            double recall = totalTP + totalFN == 0 ? 0 : (double) totalTP / (totalTP + totalFN);
-            double overallF1 = precision + recall == 0 ? 0 : 2 * precision * recall / (precision + recall);
-
-            System.out.print("," + overallF1);
-            //System.out.printf("%n%-80s (Overall F1): %.3f%n", "All RHS Combined", overallF1);
-
-            // Step 2: Handle RHS attributes not covered by acceptedViolations
-            List<List<Integer>> expectedViolationsPerColumn = violationsPerAttributeInFile.get(fileNames[0]);
-            int numColumns = expectedViolationsPerColumn.size();
-
-            for (int colIndex = 0; colIndex < numColumns; colIndex++) {
-                String rhs = indexToName.get(colIndex);
-                if (!bestPerRhs.containsKey(rhs)) {
-                    List<Integer> expected = expectedViolationsPerColumn.get(colIndex);
-                    totalFN += expected.size(); // nothing predicted → all expected are FN
-                }
-            }
-
-            precision = totalTP + totalFP == 0 ? 0 : (double) totalTP / (totalTP + totalFP);
-            recall = totalTP + totalFN == 0 ? 0 : (double) totalTP / (totalTP + totalFN);
-            overallF1 = precision + recall == 0 ? 0 : 2 * precision * recall / (precision + recall);
-
-            //System.out.printf("%-80s (Overall F1 - all RHS): %.3f%n", "All RHS from ground truth", overallF1);
-            //System.out.println("");
-            System.out.print("," + overallF1);
-
-            totalTP = 0;
-            totalFP = 0;
-            totalFN = 0;
-
-            for (Map.Entry<String, List<RelaxedFunctionalDependency>> entry : rfdsPerRhs.entrySet()) {
-                String rhs = entry.getKey();
-                List<RelaxedFunctionalDependency> rfds = entry.getValue();
-                int size = rfds.size();
-
-                // Skip if all determinants are empty
-                if (rfds.stream().allMatch(rfd -> rfd.getDeterminant().getColumnIdentifiers().isEmpty())) {
-                    continue;
-                }
-
-                if (rfds.size() == 2) { //No majority "possible" will take all values therefore revert back to take the best
-                    if (rfds.get(0).getMeasure() > rfds.get(1).getMeasure())
-                        rfds.remove(1);
-                    else
-                        rfds.remove(0);
-                }
-
-                // Step 2: Majority voting on actual violations
-                Map<Integer, Integer> indexCount = new HashMap<>();
-                for (RelaxedFunctionalDependency rfd : rfds) {
-                    List<Integer> violations2 = acceptedViolations.get(rfd);
-                    if (violations2 == null)
-                        violations2 = new ArrayList<>();
-                    for (Integer index : violations2) {
-                        indexCount.merge(index, 1, Integer::sum);
-                    }
-                }
-
-                int threshold = (rfds.size() / 2);
-                Set<Integer> actualSet = indexCount.entrySet().stream()
-                        .filter(e -> e.getValue() > threshold)
-                        .map(Map.Entry::getKey)
-                        .collect(Collectors.toSet());
-
-                Integer indexOfRhs = getIndex(indexToName, rhs);
-                List<Integer> expectedViolations = violationsPerAttributeInFile.get(fileNames[0]).get(indexOfRhs);
-                Set<Integer> expectedSet = new HashSet<>(expectedViolations);
-
-                // Compute TP, FP, FN
-                Set<Integer> tpSet = new HashSet<>(actualSet);
-                tpSet.retainAll(expectedSet);
-
-                //_------
-                Set<Integer> onlyInOne = new HashSet<>(actualSet);
-                onlyInOne.addAll(expectedSet); // now has union
-
-                Set<Integer> intersection = new HashSet<>(actualSet);
-                intersection.retainAll(expectedSet); // now has common elements
-
-                onlyInOne.removeAll(intersection);
-                //System.out.print("");
-                //-----------
-
-
-                int tp = tpSet.size();
-                int fp = actualSet.size() - tp;
-                int fn = expectedSet.size() - tp;
-
-                totalTP += tp;
-                totalFP += fp;
-                totalFN += fn;
-
-                double f1 = computeF1(expectedViolations, new ArrayList<>(actualSet));
-                //System.out.printf("%-70s (F1): %.3f, Voted from %d FDs%n", "VOTED -> " + rhs, f1, size);
-            }
-
-            precision = totalTP + totalFP == 0 ? 0 : (double) totalTP / (totalTP + totalFP);
-            recall = totalTP + totalFN == 0 ? 0 : (double) totalTP / (totalTP + totalFN);
-            overallF1 = precision + recall == 0 ? 0 : 2 * precision * recall / (precision + recall);
-
-            //System.out.printf("%n%-80s (Overall F1): %.3f%n", "All RHS Combined (Voting)", overallF1);
-            System.out.print("," + overallF1);
-            for (int colIndex = 0; colIndex < numColumns; colIndex++) {
-                String rhs = indexToName.get(colIndex);
-                if (!bestPerRhs.containsKey(rhs)) {
-                    List<Integer> expected = expectedViolationsPerColumn.get(colIndex);
-                    totalFN += expected.size(); // nothing predicted → all expected are FN
-                }
-            }
-
-            precision = totalTP + totalFP == 0 ? 0 : (double) totalTP / (totalTP + totalFP);
-            recall = totalTP + totalFN == 0 ? 0 : (double) totalTP / (totalTP + totalFN);
-            overallF1 = precision + recall == 0 ? 0 : 2 * precision * recall / (precision + recall);
-
-            //System.out.printf("%-70s (Overall F1 - all RHS): %.3f%n", "All RHS from ground truth (Voting)", overallF1);
-            //System.out.printf("%-70s (Overall Recall - all RHS): %.3f%n", "All RHS from ground truth (Voting)", recall);
-            //System.out.printf("%-70s (Overall Precision - all RHS): %.3f%n", "All RHS from ground truth (Voting)", precision);
-            System.out.print("," + overallF1 + "\n");
-            clean();
         }
+
+        //System.out.println("\nAverage gpdep per dependent column:");
+        for (Map.Entry<String, List<Double>> entry : gpdepByColumn.entrySet()) {
+            String column = entry.getKey();
+            List<Double> gpdepList = entry.getValue();
+
+            double sum = 0.0;
+            for (double gpdep : gpdepList) {
+                sum += gpdep;
+            }
+            double average = gpdepList.isEmpty() ? 1.0 : sum / gpdepList.size();
+
+            //System.out.printf("Column: %-20s  Avg gpdep: %.4f%n", column, average);
+        }
+
+        double overallAverage = totalCount == 0 ? 0.0 : totalGpdep / totalCount;
+        //System.out.printf("\nOverall average gpdep: %.4f%n", overallAverage);
+        //System.out.println();
+
+        Map<String, RelaxedFunctionalDependency> bestPerRhs = new HashMap<>();
+
+        for (RelaxedFunctionalDependency rfd : acceptedViolations.keySet()) {
+            String rhs = rfd.getDependant().toString();
+            bestPerRhs.merge(rhs, rfd, (existing, current) ->
+                    current.getMeasure() > existing.getMeasure() ? current : existing
+            );
+        }
+
+        Map<String, List<RelaxedFunctionalDependency>> rfdsPerRhs = new HashMap<>();
+
+        for (RelaxedFunctionalDependency rfd : acceptedViolations.keySet()) {
+            String rhs = rfd.getDependant().toString();
+            rfdsPerRhs.computeIfAbsent(rhs, k -> new ArrayList<>()).add(rfd);
+        }
+
+        int totalTP = 0;
+        int totalFP = 0;
+        int totalFN = 0;
+
+        Map<String, List<List<Integer>>> violationsPerAttributeInFile = readXIndicesColumnWise(csvFiles);
+        for (Map.Entry<String, RelaxedFunctionalDependency> entry : bestPerRhs.entrySet()) {
+            String rhs = entry.getKey();
+            RelaxedFunctionalDependency bestRfd = entry.getValue();
+            if (entry.getValue().getDeterminant().getColumnIdentifiers().isEmpty())
+                continue;
+            Integer indexOfRhs = getIndex(indexToName, rhs);
+            List<Integer> expectedViolations = violationsPerAttributeInFile.get(fileNames[0]).get(indexOfRhs);
+            List<Integer> actualViolations = acceptedViolations.get(bestRfd);
+            if (actualViolations == null) {
+                actualViolations = new ArrayList<>();
+            }
+            Set<Integer> expectedSet = new HashSet<>(expectedViolations);
+            Set<Integer> actualSet = new HashSet<>(actualViolations);
+
+            Set<Integer> tpSet = new HashSet<>(actualSet);
+            tpSet.retainAll(expectedSet);
+
+            int tp = tpSet.size();
+            int fp = actualSet.size() - tp;
+            int fn = expectedSet.size() - tp;
+
+            totalTP += tp;
+            totalFP += fp;
+            totalFN += fn;
+
+            double f1 = computeF1(expectedViolations, actualViolations);
+            //System.out.printf("%-70s (F1): %.3f, GPDEP: %.3f%n", bestRfd.getDeterminant() + "->" + bestRfd.getDependant(), f1, bestRfd.getMeasure());
+        }
+
+
+        double precision = totalTP + totalFP == 0 ? 0 : (double) totalTP / (totalTP + totalFP);
+        double recall = totalTP + totalFN == 0 ? 0 : (double) totalTP / (totalTP + totalFN);
+        double overallF1 = precision + recall == 0 ? 0 : 2 * precision * recall / (precision + recall);
+
+        //System.out.print("," + overallF1);
+        System.out.printf("%n%-80s (Overall F1): %.3f%n", "All RHS Combined", overallF1);
+
+        // Step 2: Handle RHS attributes not covered by acceptedViolations
+        List<List<Integer>> expectedViolationsPerColumn = violationsPerAttributeInFile.get(fileNames[0]);
+        int numColumns = expectedViolationsPerColumn.size();
+
+        for (int colIndex = 0; colIndex < numColumns; colIndex++) {
+            String rhs = indexToName.get(colIndex);
+            if (!bestPerRhs.containsKey(rhs)) {
+                List<Integer> expected = expectedViolationsPerColumn.get(colIndex);
+                totalFN += expected.size(); // nothing predicted → all expected are FN
+            }
+        }
+
+        precision = totalTP + totalFP == 0 ? 0 : (double) totalTP / (totalTP + totalFP);
+        recall = totalTP + totalFN == 0 ? 0 : (double) totalTP / (totalTP + totalFN);
+        overallF1 = precision + recall == 0 ? 0 : 2 * precision * recall / (precision + recall);
+
+        System.out.printf("%-80s (Overall F1 - all RHS): %.3f%n", "All RHS from ground truth", overallF1);
+        //System.out.println("");
+        //System.out.print("," + overallF1);
+
+        totalTP = 0;
+        totalFP = 0;
+        totalFN = 0;
+
+        for (Map.Entry<String, List<RelaxedFunctionalDependency>> entry : rfdsPerRhs.entrySet()) {
+            String rhs = entry.getKey();
+            List<RelaxedFunctionalDependency> rfds = entry.getValue();
+            int size = rfds.size();
+
+            // Skip if all determinants are empty
+            if (rfds.stream().allMatch(rfd -> rfd.getDeterminant().getColumnIdentifiers().isEmpty())) {
+                continue;
+            }
+
+            if (rfds.size() == 2) { //No majority "possible" will take all values therefore revert back to take the best
+                if (rfds.get(0).getMeasure() > rfds.get(1).getMeasure())
+                    rfds.remove(1);
+                else
+                    rfds.remove(0);
+            }
+
+            // Step 2: Majority voting on actual violations
+            Map<Integer, Integer> indexCount = new HashMap<>();
+            for (RelaxedFunctionalDependency rfd : rfds) {
+                List<Integer> violations2 = acceptedViolations.get(rfd);
+                if (violations2 == null)
+                    violations2 = new ArrayList<>();
+                for (Integer index : violations2) {
+                    indexCount.merge(index, 1, Integer::sum);
+                }
+            }
+
+            int threshold = (rfds.size() / 2);
+            Set<Integer> actualSet = indexCount.entrySet().stream()
+                    .filter(e -> e.getValue() > threshold)
+                    .map(Map.Entry::getKey)
+                    .collect(Collectors.toSet());
+
+            Integer indexOfRhs = getIndex(indexToName, rhs);
+            List<Integer> expectedViolations = violationsPerAttributeInFile.get(fileNames[0]).get(indexOfRhs);
+            Set<Integer> expectedSet = new HashSet<>(expectedViolations);
+
+            // Compute TP, FP, FN
+            Set<Integer> tpSet = new HashSet<>(actualSet);
+            tpSet.retainAll(expectedSet);
+
+            //_------
+            Set<Integer> onlyInOne = new HashSet<>(actualSet);
+            onlyInOne.addAll(expectedSet); // now has union
+
+            Set<Integer> intersection = new HashSet<>(actualSet);
+            intersection.retainAll(expectedSet); // now has common elements
+
+            onlyInOne.removeAll(intersection);
+            //System.out.print("");
+            //-----------
+
+
+            int tp = tpSet.size();
+            int fp = actualSet.size() - tp;
+            int fn = expectedSet.size() - tp;
+
+            totalTP += tp;
+            totalFP += fp;
+            totalFN += fn;
+
+            double f1 = computeF1(expectedViolations, new ArrayList<>(actualSet));
+            //System.out.printf("%-70s (F1): %.3f, Voted from %d FDs%n", "VOTED -> " + rhs, f1, size);
+        }
+
+        precision = totalTP + totalFP == 0 ? 0 : (double) totalTP / (totalTP + totalFP);
+        recall = totalTP + totalFN == 0 ? 0 : (double) totalTP / (totalTP + totalFN);
+        overallF1 = precision + recall == 0 ? 0 : 2 * precision * recall / (precision + recall);
+
+        System.out.printf("%n%-80s (Overall F1): %.3f%n", "All RHS Combined (Voting)", overallF1);
+        //System.out.print("," + overallF1);
+        for (int colIndex = 0; colIndex < numColumns; colIndex++) {
+            String rhs = indexToName.get(colIndex);
+            if (!bestPerRhs.containsKey(rhs)) {
+                List<Integer> expected = expectedViolationsPerColumn.get(colIndex);
+                totalFN += expected.size(); // nothing predicted → all expected are FN
+            }
+        }
+
+        precision = totalTP + totalFP == 0 ? 0 : (double) totalTP / (totalTP + totalFP);
+        recall = totalTP + totalFN == 0 ? 0 : (double) totalTP / (totalTP + totalFN);
+        overallF1 = precision + recall == 0 ? 0 : 2 * precision * recall / (precision + recall);
+
+        System.out.printf("%-70s (Overall F1 - all RHS): %.3f%n", "All RHS from ground truth (Voting)", overallF1);
+        //System.out.printf("%-70s (Overall Recall - all RHS): %.3f%n", "All RHS from ground truth (Voting)", recall);
+        //System.out.printf("%-70s (Overall Precision - all RHS): %.3f%n", "All RHS from ground truth (Voting)", precision);
+        //System.out.print("," + overallF1 + "\n");
+        clean();
     }
 
     private static String parseFd(String k, Map<Integer, String> indexToName) {

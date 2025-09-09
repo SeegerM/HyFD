@@ -44,13 +44,13 @@ public class MetadataUtils {
 
     private static Map<String, List<String>> getDataMap(File[] fileNames) throws IOException {
         Map<String, List<String>> columnData = new HashMap<>();
-
+        String splitter = ",";//"\t";
         for (File csvFile : fileNames) {
             try (BufferedReader br = new BufferedReader(new FileReader(csvFile))) {
                 String headerLine = br.readLine();
                 if (headerLine == null) continue;
 
-                String[] headers = headerLine.split(",");
+                String[] headers = headerLine.split(splitter);
                 List<List<String>> columns = new ArrayList<>();
 
                 // Initialize list for each column
@@ -60,7 +60,7 @@ public class MetadataUtils {
 
                 String line;
                 while ((line = br.readLine()) != null) {
-                    String[] values = line.split(",", -1); // -1 keeps empty strings
+                    String[] values = line.split(splitter, -1); // -1 keeps empty strings
                     for (int i = 0; i < headers.length && i < values.length; i++) {
                         columns.get(i).add(values[i]);
                     }

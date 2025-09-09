@@ -24,12 +24,7 @@ import de.metanome.algorithm_integration.result_receiver.FunctionalDependencyRes
 import de.metanome.algorithm_integration.result_receiver.RelaxedFunctionalDependencyResultReceiver;
 import de.metanome.algorithm_integration.results.FunctionalDependency;
 import de.metanome.algorithm_integration.results.RelaxedFunctionalDependency;
-import de.metanome.algorithms.hyfd.structures.FDList;
-import de.metanome.algorithms.hyfd.structures.FDSet;
-import de.metanome.algorithms.hyfd.structures.FDTree;
-import de.metanome.algorithms.hyfd.structures.IntegerPair;
-import de.metanome.algorithms.hyfd.structures.PLIBuilder;
-import de.metanome.algorithms.hyfd.structures.PositionListIndex;
+import de.metanome.algorithms.hyfd.structures.*;
 import de.metanome.algorithms.hyfd.utils.Logger;
 import de.metanome.algorithms.hyfd.utils.ValueComparator;
 import de.uni_potsdam.hpi.utils.CollectionUtils;
@@ -213,12 +208,19 @@ public class HyFD implements RelaxedFunctionalDependencyAlgorithm, BooleanParame
 		
 		// Calculate plis
 		Logger.getInstance().writeln("Reading data and calculating plis ...");
-		PLIBuilder pliBuilder = new PLIBuilder(this.inputRowLimit);
-		List<PositionListIndex> plis = pliBuilder.getPLIs(relationalInput, this.numAttributes, this.valueComparator.isNullEqualNull());
+		//PLIBuilder pliBuilder = new PLIBuilder(this.inputRowLimit);
+		//List<PositionListIndex> plis = pliBuilder.getPLIs(relationalInput, this.numAttributes, this.valueComparator.isNullEqualNull());
+		TemporalPLIBuilder tPliBuilder = new TemporalPLIBuilder(this.numAttributes);
+		TemporalPLIBuilder.TemporalData temporalData = tPliBuilder.build(relationalInput);
+
+		List<PositionListIndex> plis = temporalData.plis;
+		int[][] compressedRecords = temporalData.compressedRecords;
+		long[] timestamps = temporalData.timestamps;
+		final int numRecords = temporalData.numRecords;
+
 		this.closeInput(relationalInput);
 
-		final int numRecords = pliBuilder.getNumLastRecords();
-		pliBuilder = null;
+		tPliBuilder = null;
 		
 		if (numRecords == 0) {
 			ObjectArrayList<ColumnIdentifier> columnIdentifiers = this.buildColumnIdentifiers();
@@ -239,15 +241,15 @@ public class HyFD implements RelaxedFunctionalDependencyAlgorithm, BooleanParame
 		});
 		
 		// Calculate inverted plis
-		Logger.getInstance().writeln("Inverting plis ...");
-		int[][] invertedPlis = this.invertPlis(plis, numRecords);
+		//Logger.getInstance().writeln("Inverting plis ...");
+		//int[][] invertedPlis = this.invertPlis(plis, numRecords);
 
 		// Extract the integer representations of all records from the inverted plis
-		Logger.getInstance().writeln("Extracting integer representations for the records ...");
-		int[][] compressedRecords = new int[numRecords][];
-		for (int recordId = 0; recordId < numRecords; recordId++)
-			compressedRecords[recordId] = this.fetchRecordFrom(recordId, invertedPlis);
-		invertedPlis = null;
+		//Logger.getInstance().writeln("Extracting integer representations for the records ...");
+		//int[][] compressedRecords = new int[numRecords][];
+		//for (int recordId = 0; recordId < numRecords; recordId++)
+		//	compressedRecords[recordId] = this.fetchRecordFrom(recordId, invertedPlis);
+		//invertedPlis = null;
 		
 		// Initialize the negative cover
 		FDSet negCover = new FDSet(this.numAttributes, this.maxLhsSize);
@@ -264,9 +266,9 @@ public class HyFD implements RelaxedFunctionalDependencyAlgorithm, BooleanParame
 		int maxViolations = (int) (numRecords - (numRecords * threshold));
 		Logger.getInstance().writeln("Max Violations: " + maxViolations);
 
-		//Sampler sampler = new Sampler(negCover, posCover, maxViolations, compressedRecords, plis, this.efficiencyThreshold, this.valueComparator, this.memoryGuardian);
+		Sampler sampler = new Sampler(negCover, posCover, maxViolations, compressedRecords, plis, timestamps, this.efficiencyThreshold, this.valueComparator, this.memoryGuardian);
 		//Inductor inductor = new Inductor(negCover, posCover, this.memoryGuardian);
-		Validator validator = new Validator(negCover, posCover, maxViolations, numRecords, compressedRecords, plis, this.efficiencyThreshold, this.validateParallel, this.memoryGuardian, this.buildColumnIdentifiers());
+		Validator validator = new Validator(negCover, posCover, maxViolations, numRecords, compressedRecords, plis, timestamps, this.efficiencyThreshold, this.validateParallel, this.memoryGuardian, this.buildColumnIdentifiers());
 		
 		List<IntegerPair> comparisonSuggestions = new ArrayList<>();
 		do {
