@@ -52,7 +52,11 @@ public class PLIBuilder {
 		this.numRecords = 0;
 		while (relationalInput.hasNext() && (this.inputRowLimit <= 0 || this.inputRowLimit != this.numRecords)) {
 			List<String> record = relationalInput.next();
-			
+			if (record.size() > numAttributes) {
+				System.out.println("Skipped:" + record);
+				continue;
+			}
+
 			int attributeId = 0;
 			for (String value : record) {
 				HashMap<String, IntArrayList> clusterMap = clusterMaps.get(attributeId);

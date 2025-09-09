@@ -7,8 +7,7 @@ import de.metanome.algorithm_integration.input.RelationalInput;
 import org.jsoup.Jsoup;
 
 import java.io.IOException;
-import java.util.Iterator;
-import java.util.List;
+import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
@@ -24,6 +23,7 @@ public class InMemoryTemporalTableIterator implements RelationalInput {
     private Iterator<JsonNode> revisionIterator;
     private Iterator<JsonNode> rowIterator;
     private String currentTimestamp;
+    private int currentTimeIndex = 0;
 
     // *** THE MAIN CHANGE IS HERE: CONSTRUCTOR TAKES JSON STRING ***
     public InMemoryTemporalTableIterator(String relationName, String tableJsonData) throws InputIterationException {
@@ -52,22 +52,57 @@ public class InMemoryTemporalTableIterator implements RelationalInput {
                         .map(cell -> extractContentFromCell(cell.path("content").asText()))
                         .collect(Collectors.toList());
 
-                values.add(currentTimestamp);
+                //values.add(currentTimestamp);
+                values.add(String.valueOf(currentTimeIndex));
                 return values;
             }
 
             if (revisionIterator != null && revisionIterator.hasNext()) {
                 JsonNode revisionNode = revisionIterator.next();
                 this.currentTimestamp = revisionNode.get("revisionDate").asText();
+                this.currentTimeIndex++;
                 JsonNode cellsNode = revisionNode.get("cells");
-                if (cellsNode != null && cellsNode.isArray() && cellsNode.size() > 0) {
+                if (cellsNode != null && cellsNode.isArray() && !cellsNode.isEmpty()) {
 
                     // Robust header extraction: get header from the first row of cells
                     if (this.columnHeaders == null) {
-                        this.columnHeaders = StreamSupport.stream(cellsNode.get(0).spliterator(), false)
+                        // Step 1: Extract potential headers from the first row
+                        List<String> rawHeaders = StreamSupport.stream(cellsNode.get(0).spliterator(), false)
                                 .map(cell -> extractContentFromCell(cell.path("content").asText()))
                                 .collect(Collectors.toList());
-                        this.numberOfColumns = this.columnHeaders.size();
+
+                        // Step 2: Handle missing attribute names
+                        // Check if headers are effectively missing (e.g., all are empty strings)
+                        boolean useDefaultNames = rawHeaders.stream().allMatch(String::isEmpty);
+                        if (useDefaultNames) {
+                            List<String> defaultHeaders = new ArrayList<>();
+                            for (int i = 0; i < rawHeaders.size(); i++) {
+                                defaultHeaders.add("column_" + i);
+                            }
+                            rawHeaders = defaultHeaders;
+                        }
+
+                        // Step 3: Handle duplicate attribute names by making them unique
+                        List<String> finalHeaders = new ArrayList<>();
+                        Map<String, Integer> nameCounts = new HashMap<>();
+                        for (String header : rawHeaders) {
+                            String newHeader = header;
+                            if (nameCounts.containsKey(header)) {
+                                int count = nameCounts.get(header);
+                                // Append suffix and ensure the new name doesn't already exist
+                                do {
+                                    newHeader = header + "_" + count;
+                                    count++;
+                                } while (nameCounts.containsKey(newHeader));
+                                nameCounts.put(header, count);
+                            }
+                            finalHeaders.add(newHeader);
+                            nameCounts.put(newHeader, 1);
+                        }
+
+                        this.columnHeaders = finalHeaders;
+                        this.numberOfColumns = this.columnHeaders.size() + 1; // +1 for the Time column
+                        this.columnHeaders.add("Time");
                     }
 
                     this.rowIterator = StreamSupport.stream(cellsNode.spliterator(), false).skip(1).iterator();

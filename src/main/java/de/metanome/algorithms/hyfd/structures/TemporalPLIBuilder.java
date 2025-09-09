@@ -66,7 +66,7 @@ public class TemporalPLIBuilder {
             List<String> row = relationalInput.next();
 
             // Parse timestamp (last column)
-            String timestampStr = row.get(this.numAttributes);
+            String timestampStr = row.get(this.numAttributes-1);
             long ts;
             try {
                 ts = timestampParser.parse(timestampStr).getTime();
