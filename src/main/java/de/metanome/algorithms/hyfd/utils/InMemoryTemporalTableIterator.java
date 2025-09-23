@@ -25,7 +25,6 @@ public class InMemoryTemporalTableIterator implements RelationalInput {
     private String currentTimestamp;
     private int currentTimeIndex = 0;
 
-    // *** THE MAIN CHANGE IS HERE: CONSTRUCTOR TAKES JSON STRING ***
     public InMemoryTemporalTableIterator(String relationName, String tableJsonData) throws InputIterationException {
         this.relationName = relationName;
         this.jsonMapper = new ObjectMapper();

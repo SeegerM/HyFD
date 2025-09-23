@@ -52,6 +52,7 @@ public class PLIBuilder {
 		this.numRecords = 0;
 		while (relationalInput.hasNext() && (this.inputRowLimit <= 0 || this.inputRowLimit != this.numRecords)) {
 			List<String> record = relationalInput.next();
+			//@TODO
 			if (record.size() > numAttributes) {
 				System.out.println("Skipped:" + record);
 				continue;
