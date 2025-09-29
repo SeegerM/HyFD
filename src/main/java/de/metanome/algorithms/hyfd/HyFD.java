@@ -268,37 +268,38 @@ public class HyFD implements RelaxedFunctionalDependencyAlgorithm, BooleanParame
 
 		Sampler sampler = new Sampler(negCover, posCover, maxViolations, compressedRecords, plis, this.efficiencyThreshold, this.valueComparator, this.memoryGuardian);
 		Inductor inductor = new Inductor(negCover, posCover, this.memoryGuardian);
-		Validator validator = new Validator(negCover, posCover, maxViolations, numRecords, compressedRecords, plis, this.efficiencyThreshold, this.validateParallel, this.memoryGuardian, this.buildColumnIdentifiers(), writeViolations);
+		Validator validator = new Validator(negCover, posCover, maxViolations, numRecords, compressedRecords, plis, this.efficiencyThreshold, this.validateParallel, this.memoryGuardian, this.buildColumnIdentifiers(), writeViolations, true);
 		
 		List<IntegerPair> comparisonSuggestions = new ArrayList<>();
-		//long sampleTime = 0;
-		//long inductorTime = 0;
-		//long validationTime = 0;
+		long sampleTime = 0;
+		long inductorTime = 0;
+		long validationTime = 0;
 		do {
-			//long startTime = System.currentTimeMillis();
-			//System.out.println(comparisonSuggestions.size());
+			long startTime = System.currentTimeMillis();
+			System.out.println(comparisonSuggestions.size());
 			FDList newNonFds = sampler.enrichNegativeCover(comparisonSuggestions);
-			//System.out.println(newNonFds.size());
-			//sampleTime += System.currentTimeMillis() - startTime;
-			//startTime = System.currentTimeMillis();
+			System.out.println(newNonFds.size());
+			sampleTime += System.currentTimeMillis() - startTime;
+			startTime = System.currentTimeMillis();
 			inductor.updatePositiveCover(newNonFds);
-			//inductorTime += System.currentTimeMillis() - startTime;
-			//startTime = System.currentTimeMillis();
+			inductorTime += System.currentTimeMillis() - startTime;
+			startTime = System.currentTimeMillis();
 			comparisonSuggestions = validator.validatePositiveCover();
-			//validationTime += System.currentTimeMillis() - startTime;
+			validationTime += System.currentTimeMillis() - startTime;
 		}
 		while (comparisonSuggestions != null);
 		negCover = null;
-		//System.out.println("SamplerTime: " + sampleTime + " ms");
-		//System.out.println("InductorTime: " + inductorTime + " ms");
-		//System.out.println("ValidationTime: " + validationTime + " ms");
+		System.out.println("SamplerTime: " + sampleTime + " ms");
+		System.out.println("InductorTime: " + inductorTime + " ms");
+		System.out.println("ValidationTime: " + validationTime + " ms");
 
 		// Output all valid FDs
 		Logger.getInstance().writeln("Translating FD-tree into result format ...");
 		
 	//	int numFDs = posCover.writeFunctionalDependencies("HyFD_backup_" + this.tableName + "_results.txt", this.buildColumnIdentifiers(), plis, false);
 		int numFDs = posCover.addFunctionalDependenciesInto(this.resultReceiver, this.buildColumnIdentifiers(), plis);
-		
+
+		System.out.println(numFDs);
 		Logger.getInstance().writeln("... done! (" + numFDs + " FDs)");
 	}
 

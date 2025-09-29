@@ -40,6 +40,7 @@ import it.unimi.dsi.fastutil.objects.ObjectArrayList;
  */
 public class PositionListIndex {
 
+	public BitSet lhsAttributes;
 	public final int attribute;
 	protected final List<IntArrayList> clusters;
 	protected final int numNonUniqueValues;
@@ -193,8 +194,31 @@ public class PositionListIndex {
 		}
 		return intersectMap;
 	}
-*/	
-	
+*/
+
+	/**
+	 * Builds an inverted index for this PLI: for each recordId (0..numRecords-1),
+	 * store the clusterId it belongs to, or -1 if it is not in any non-unary cluster.
+	 *
+	 * @param numRecords total number of records in the relation
+	 * @return int[] of length numRecords where inverted[recordId] = clusterId or -1
+	 */
+	public int[] asInvertedIndex(int numRecords) {
+		int[] inverted = new int[numRecords];
+		Arrays.fill(inverted, -1);
+
+		for (int clusterId = 0; clusterId < this.clusters.size(); clusterId++) {
+			IntArrayList cluster = this.clusters.get(clusterId);
+			// Fastutil: avoid boxing by using backing array + size()
+			int[] elems = cluster.elements();
+			int size = cluster.size();
+			for (int i = 0; i < size; i++) {
+				inverted[elems[i]] = clusterId;
+			}
+		}
+		return inverted;
+	}
+
 	public PositionListIndex intersect(int[]... plis) {
 		List<IntArrayList> clusters = new ArrayList<>();
 		for (IntArrayList pivotCluster : this.clusters) {

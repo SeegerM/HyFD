@@ -1,8 +1,6 @@
 package de.metanome.algorithms.hyfd;
 
-import java.util.ArrayList;
-import java.util.BitSet;
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -37,8 +35,11 @@ public class Validator {
 	ObjectArrayList<ColumnIdentifier> columnIdentifiers;
 	private int level = 0;
 	private boolean writeViolations;
+	private boolean useGpu;
+	private GPUValidator gpuValidator;
+	private Map<BitSet, PositionListIndex> lhsPliCache;
 
-	public Validator(FDSet negCover, FDTree posCover, int maxViolations, int numRecords, int[][] compressedRecords, List<PositionListIndex> plis, float efficiencyThreshold, boolean parallel, MemoryGuardian memoryGuardian, ObjectArrayList<ColumnIdentifier> columnIdentifiers, boolean writeViolations) {
+	public Validator(FDSet negCover, FDTree posCover, int maxViolations, int numRecords, int[][] compressedRecords, List<PositionListIndex> plis, float efficiencyThreshold, boolean parallel, MemoryGuardian memoryGuardian, ObjectArrayList<ColumnIdentifier> columnIdentifiers, boolean writeViolations, boolean gpu) {
 		this.negCover = negCover;
 		this.posCover = posCover;
 		this.numRecords = numRecords;
@@ -49,7 +50,13 @@ public class Validator {
 		this.maxViolations = maxViolations;
 		this.columnIdentifiers = columnIdentifiers;
 		this.writeViolations = writeViolations;
-		
+
+		this.useGpu = gpu;
+		if (this.useGpu) {
+			this.gpuValidator = new GPUValidator();
+			this.lhsPliCache = new HashMap<>(); // Initialize cache for GPU use
+		}
+
 		if (parallel) {
 			int numThreads = Runtime.getRuntime().availableProcessors();
 			this.executor = Executors.newFixedThreadPool(numThreads);
@@ -85,60 +92,6 @@ public class Validator {
 		}
 		public ValidationTask(FDTreeElementLhsPair elementLhsPair) {
 			this.elementLhsPair = elementLhsPair;
-		}
-
-		public ValidationResult call2() throws Exception {
-			ValidationResult result = new ValidationResult();
-
-			FDTreeElement element = this.elementLhsPair.getElement();
-			BitSet lhs = this.elementLhsPair.getLhs();
-			BitSet rhs = element.getFds();
-
-			int rhsSize = rhs.cardinality();
-			if (rhsSize == 0)
-				return result;
-			result.validations = result.validations + rhsSize;
-
-			if (Validator.this.level == 0) {
-				// Check if rhs is unique
-				for (int rhsAttr = rhs.nextSetBit(0); rhsAttr >= 0; rhsAttr = rhs.nextSetBit(rhsAttr + 1)) {
-					//if (!Validator.this.plis.get(rhsAttr).isConstant(Validator.this.numRecords)) {
-					if (!Validator.this.plis.get(rhsAttr).isConstant(Validator.this.numRecords)) {
-						element.removeFd(rhsAttr);
-						result.invalidFDs.add(new FD(lhs, rhsAttr));
-					}
-					result.intersections++;
-				}
-			}
-			else if (Validator.this.level == 1) {
-				// Check if lhs from plis refines rhs
-				int lhsAttribute = lhs.nextSetBit(0);
-				for (int rhsAttr = rhs.nextSetBit(0); rhsAttr >= 0; rhsAttr = rhs.nextSetBit(rhsAttr + 1)) {
-					//if (!Validator.this.plis.get(lhsAttribute).refines(Validator.this.compressedRecords, rhsAttr)) {
-					if (!Validator.this.plis.get(lhsAttribute).refines(Validator.this.compressedRecords, rhsAttr)) {
-						element.removeFd(rhsAttr);
-						result.invalidFDs.add(new FD(lhs, rhsAttr));
-					}
-					result.intersections++;
-				}
-			}
-			else {
-				// Check if lhs from plis plus remaining inverted plis refines rhs
-				int firstLhsAttr = lhs.nextSetBit(0);
-
-				lhs.clear(firstLhsAttr);
-				BitSet validRhs = Validator.this.plis.get(firstLhsAttr).refinesOld(Validator.this.compressedRecords, lhs, rhs, result.comparisonSuggestions);
-				lhs.set(firstLhsAttr);
-
-				result.intersections++;
-
-				rhs.andNot(validRhs); // Now contains all invalid FDs
-				element.setFds(validRhs); // Sets the valid FDs in the FD tree
-
-				for (int rhsAttr = rhs.nextSetBit(0); rhsAttr >= 0; rhsAttr = rhs.nextSetBit(rhsAttr + 1))
-					result.invalidFDs.add(new FD(lhs, rhsAttr));
-			}
-			return result;
 		}
 
 		// Partial Validation Call
@@ -271,11 +224,16 @@ public class Validator {
 			Logger.getInstance().write("\tLevel " + this.level + ": " + currentLevel.size() + " elements; ");
 			
 			// Validate current level
-			Logger.getInstance().write("(V)");
-			
-			ValidationResult validationResult = (this.executor == null) ? this.validateSequential(currentLevel) : this.validateParallel(currentLevel);
+			ValidationResult validationResult;
+			if (this.useGpu && this.level > 0) { // GPU path is most effective for level > 0
+				Logger.getInstance().write("(V-GPU)");
+				validationResult = this.validateWithGpu(currentLevel);
+			} else {
+				Logger.getInstance().write("(V-CPU)");
+				validationResult = (this.executor == null) ? this.validateSequential(currentLevel) : this.validateParallel(currentLevel);
+			}
 			comparisonSuggestions.addAll(validationResult.comparisonSuggestions);
-			
+
 			// If the next level exceeds the predefined maximum lhs size, then we can stop here
 			if ((this.posCover.getMaxDepth() > -1) && (this.level >= this.posCover.getMaxDepth())) {
 				int numInvalidFds = validationResult.invalidFDs.size();
@@ -354,7 +312,144 @@ public class Validator {
 		
 		return null;
 	}
-	
+
+	private ValidationResult validateWithGpu(List<FDTreeElementLhsPair> currentLevel) {
+		ValidationResult validationResult = new ValidationResult();
+		List<GPUValidator.ValidationTask> gpuTasks = new ArrayList<>();
+
+		// We need to map GPU tasks back to the original HyFD objects
+		List<Object[]> taskMetadata = new ArrayList<>();
+
+		// 1. Create GPU validation tasks for all FDs in the current level
+		for (FDTreeElementLhsPair elementLhsPair : currentLevel) {
+			FDTreeElement element = elementLhsPair.getElement();
+			BitSet lhs = elementLhsPair.getLhs();
+			BitSet rhsSet = element.getFds();
+
+			if (rhsSet.isEmpty()) {
+				continue;
+			}
+
+			// Get or compute the PositionListIndex for the LHS
+			//int firstLhsAttr = lhs.nextSetBit(0);
+			//PositionListIndex lhsPli = plis.get(firstLhsAttr);
+			PositionListIndex lhsPli = getLhsPli(lhs);
+			lhsPli.lhsAttributes = lhs;
+			if (lhsPli == null || lhsPli.getClusters().isEmpty()) {
+				continue;
+			}
+
+			// Create a separate GPU task for each RHS attribute
+			for (int rhsAttr = rhsSet.nextSetBit(0); rhsAttr >= 0; rhsAttr = rhsSet.nextSetBit(rhsAttr + 1)) {
+				gpuTasks.add(new GPUValidator.ValidationTask(lhsPli, rhsAttr));
+				// Store metadata to process results later
+				taskMetadata.add(new Object[]{elementLhsPair, rhsAttr});
+				validationResult.validations++;
+			}
+		}
+
+		if (gpuTasks.isEmpty()) {
+			return validationResult;
+		}
+
+		// 2. Execute the mass validation on the GPU
+		gpuValidator.performMassValidationOld2(gpuTasks, this.compressedRecords, this.maxViolations);
+
+		// 3. Process the results from the GPU
+		for (int i = 0; i < gpuTasks.size(); i++) {
+			GPUValidator.ValidationTask finishedTask = gpuTasks.get(i);
+			Object[] meta = taskMetadata.get(i);
+			FDTreeElementLhsPair elementLhsPair = (FDTreeElementLhsPair) meta[0];
+			int rhsAttr = (int) meta[1];
+
+			if (!finishedTask.isValid()) {
+				elementLhsPair.getElement().removeFd(rhsAttr);
+				validationResult.invalidFDs.add(new FD(elementLhsPair.getLhs(), rhsAttr));
+			} else {
+				// Calculate and add score
+				float score = 1f - ((float) finishedTask.getViolations() / (float) this.numRecords);
+				elementLhsPair.getElement().addScore(rhsAttr, score);
+			}
+		}
+
+		// In this simplified integration, comparisonSuggestions are not generated by the GPU path.
+		// This could be added by modifying the GpuValidator kernel to output violating record pairs.
+		validationResult.intersections = this.lhsPliCache.size(); // Approximate metric
+		this.lhsPliCache.clear(); // Clear cache for the next level
+		return validationResult;
+	}
+
+	private PositionListIndex getLhsPli(BitSet lhs) {
+		if (lhs.cardinality() == 0) return null;
+		if (lhsPliCache.containsKey(lhs)) return lhsPliCache.get(lhs);
+
+		if (lhs.cardinality() == 1) {
+			PositionListIndex pli = this.plis.get(lhs.nextSetBit(0));
+			lhsPliCache.put(lhs, pli);
+			return pli;
+		}
+
+		// Multi-attribute LHS: compute intersection
+		List<int[]> invertedPlis = new ArrayList<>();
+		for (int attr = lhs.nextSetBit(0); attr >= 0; attr = lhs.nextSetBit(attr + 1)) {
+			if (attr != lhs.nextSetBit(0)) { // Skip first attribute (base PLI)
+				invertedPlis.add(this.plis.get(attr).asInvertedIndex(numRecords));
+			}
+		}
+
+		PositionListIndex basePli = this.plis.get(lhs.nextSetBit(0));
+		PositionListIndex intersectedPli = basePli.intersect(
+				invertedPlis.toArray(new int[0][])
+		);
+
+		lhsPliCache.put(lhs, intersectedPli);
+		return intersectedPli;
+	}
+
+	private PositionListIndex getLhsPliOld(BitSet lhs) {
+		if (lhs.cardinality() == 0) {
+			return null; // Should be handled by level 0 validation
+		}
+
+		if (lhsPliCache.containsKey(lhs)) {
+			return lhsPliCache.get(lhs);
+		}
+
+		if (lhs.cardinality() == 1) {
+			PositionListIndex pli = this.plis.get(lhs.nextSetBit(0));
+			lhsPliCache.put(lhs, pli);
+			return pli;
+		}
+
+		// Compute the intersection for multi-attribute LHS
+		int firstLhsAttr = lhs.nextSetBit(0);
+		PositionListIndex intersectionPli = this.plis.get(firstLhsAttr);
+
+		int[] otherPlis = new int[lhs.cardinality() - 1];
+		int count = 0;
+		for (int i = lhs.nextSetBit(firstLhsAttr + 1); i >= 0; i = lhs.nextSetBit(i + 1)) {
+			otherPlis[count++] = this.plis.get(i).getAttribute();
+		}
+
+		// This is a placeholder for the actual intersection logic. You need a method
+		// on PositionListIndex that can intersect with multiple other PLIs.
+		// Let's assume an intersect method exists that takes other PLIs.
+		// PositionListIndex resultPli = intersectionPli.intersect(...)
+		// For now, we return the first PLI as a simplification.
+		// A full implementation requires completing this intersection logic.
+
+		// A proper implementation would look something like this:
+		// BitSet remainingLhs = (BitSet) lhs.clone();
+		// remainingLhs.clear(firstLhsAttr);
+		// PositionListIndex resultPli = plis.get(firstLhsAttr).intersect(plis, remainingLhs);
+		// lhsPliCache.put(lhs, resultPli);
+		// return resultPli;
+
+		// Simplified for this example:
+		lhsPliCache.put(lhs, intersectionPli);
+		return intersectionPli;
+	}
+
 	private BitSet extendWith(BitSet lhs, int rhs, int extensionAttr) {
 		if (lhs.get(extensionAttr) || 											// Triviality: AA->C cannot be valid, because A->C is invalid
 			(rhs == extensionAttr) || 											// Triviality: AC->C cannot be valid, because A->C is invalid

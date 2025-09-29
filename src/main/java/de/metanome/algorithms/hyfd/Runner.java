@@ -12,6 +12,7 @@ import de.metanome.algorithm_integration.results.Result;
 import de.metanome.backend.input.file.DefaultFileInputGenerator;
 import de.metanome.backend.result_receiver.ResultCache;
 import de.uni_potsdam.hpi.utils.FileUtils;
+import uk.ac.manchester.tornado.api.runtime.TornadoRuntimeProvider;
 
 import java.io.File;
 import java.io.IOException;
@@ -38,8 +39,18 @@ public class Runner {
     static boolean strictQuots = false;
     static String[] relationNames;
 
+    public static void main2(String[] args) {
+        System.out.println(Arrays.toString(args));
+        System.out.println("foo=" + System.getProperty("foo"));
+        System.out.println("java.home=" + System.getProperty("java.home"));
+        System.out.println("tornado.load.runtime.implementation=" + System.getProperty("tornado.load.runtime.implementation"));
+        System.out.println("tornado.driver=" + System.getProperty("tornado.driver"));
+
+        System.out.println(TornadoRuntimeProvider.getTornadoRuntime().getDefaultDevice().getDeviceInfo());
+    }
+
     public static void main(String[] args) {
-        if (args.length < 3) {
+        if (args.length < 4) {
             inputFileHasHeader = true;
             fileEnding = ".csv";
             separator = ',';
@@ -87,8 +98,8 @@ public class Runner {
                 ResultCache resultReceiver = new ResultCache("MetanomeMock", getAcceptedColumns(inputGenerator));
                 HyFD hyFD = createHyFD(threshold, inputGenerator, resultReceiver);
                 hyFD.execute();
-                //for (Result fd : resultReceiver.fetchNewResults())
-                //    System.out.println(fd);
+                for (Result fd : resultReceiver.fetchNewResults())
+                    System.out.println(fd);
             }
             time = System.currentTimeMillis() - time;
             String content = "Partial HyFD," + datasetName + "," + time + "," + threshold + "\n";

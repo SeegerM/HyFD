@@ -14,7 +14,32 @@
     <partial.version>1.2-Partial</partial.version>
   </properties>
 
+  <repositories>
+    <repository>
+      <id>universityOfManchester-graal</id>
+      <url>https://raw.githubusercontent.com/beehive-lab/tornado/maven-tornadovm</url>
+    </repository>
+  </repositories>
+
   <dependencies>
+    <dependency>
+      <groupId>tornado</groupId>
+      <artifactId>tornado-api</artifactId>
+      <version>1.1.1</version>
+    </dependency>
+
+    <dependency>
+      <groupId>tornado</groupId>
+      <artifactId>tornado-runtime</artifactId>
+      <version>1.1.1</version>
+    </dependency>
+
+    <dependency>
+      <groupId>tornado</groupId>
+      <artifactId>tornado-matrices</artifactId>
+      <version>1.1.1</version>
+    </dependency>
+
     <dependency>
       <groupId>junit</groupId>
       <artifactId>junit</artifactId>
