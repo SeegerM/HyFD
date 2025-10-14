@@ -14,6 +14,22 @@ public class TemporalFDCombiner {
         public final Set<FDKey> weightedEpsilonDeltaRelaxed = new HashSet<>();
         // Optional: store per-FD diagnostics
         public final Map<FDKey, String> notes = new HashMap<>();
+
+        // Q_kon consistency scores per FD (based on timeline)
+        public final Map<FDKey, Double> qSimple = new HashMap<>();   // r_t = ¬holds[t],  g_t = 1
+        public final Map<FDKey, Double> qDelta  = new HashMap<>();   // r_t = not δ-determined, g_t = 1
+        public final Map<FDKey, Double> qWeighted = new HashMap<>(); // r_t = not δ-determined, g_t = normalized effW[t]
+
+        // per-timestamp quality (aligned with the timeline order)
+        public final List<Instant> timeAxis = new ArrayList<>();
+        public final List<Double> qTimeSimple = new ArrayList<>();
+        public final List<Double> qTimeDelta = new ArrayList<>();
+        public final List<Double> qTimeWeighted = new ArrayList<>();
+
+        // health
+        public final List<Set<FDKey>> holdsAt = new ArrayList<>(); // per-timestamp holds
+        public final List<int[]> neighborRanges = new ArrayList<>(); // per t: [lo, hi]
+
     }
 
     /** Combine per-revision FD results.
@@ -60,10 +76,18 @@ public class TemporalFDCombiner {
 
         // Universe of all FDs ever seen (union across revisions)
         Set<FDKey> universe = new HashSet<>();
-        for (RevisionResult rr : timeline) universe.addAll(rr.holds);
+        for (RevisionResult rr : timeline) {
+            universe.addAll(rr.holds);
+            out.holdsAt.add(new HashSet<>(rr.holds));
+        }
 
         int T = timeline.size();
         //double totalWeight = timeline.stream().mapToDouble(rr -> rr.weight).sum();
+
+        Map<FDKey, Double> gFD = new HashMap<>();
+        for (RevisionResult rr : timeline) {
+            rr.fdWeights.forEach((fd, w) -> gFD.merge(fd, w, Math::max)); // max over time
+        }
 
         // Precompute: for time-window δ we need neighbor indices per t
         List<int[]> neighborRanges = new ArrayList<>(T);
@@ -94,6 +118,7 @@ public class TemporalFDCombiner {
             }
             neighborRanges.add(new int[]{lo, hi});
         }
+        out.neighborRanges.addAll(neighborRanges);
 
         // Precompute decay weights (newest gets decay=1)
         final double[] decay = new double[T];
@@ -118,18 +143,34 @@ public class TemporalFDCombiner {
             totalEffW += ew;
         }
 
+        final int[] violPerT = new int[T];        // count of FDs violated at t
+        final int[] notDeltaPerT = new int[T];    // count of FDs not δ-determined at t
+        final double[] weightedPerT = new double[T]; // sum of g_fd over not-δ FDs at t
+
+        // For Q_weighted we need g_t in (0,1]; normalize effW to (0,1]
+        double maxEffW = 0.0;
+        for (double v : effW) if (v > maxEffW) maxEffW = v;
+        final double[] gWeight = new double[T];
+        for (int t = 0; t < T; t++) gWeight[t] = (maxEffW > 0.0) ? (effW[t] / maxEffW) : 1.0;
 
         for (FDKey fd : universe) {
+
             // Booleans per t whether FD holds AT t
             boolean[] holds = new boolean[T];
             for (int t = 0; t < T; t++) {
                 holds[t] = timeline.get(t).holds.contains(fd);
+                if (!holds[t]) violPerT[t]++;
             }
 
 
             // strict: holds at all t
             boolean isStrict = true;
-            for (boolean h : holds) { if (!h) { isStrict = false; break; } }
+            for (boolean h : holds) {
+                if (!h) {
+                    isStrict = false;
+                    break;
+                }
+            }
             if (isStrict) out.strict.add(fd);
 
             // ε-relaxed: violations/|T| <= ε
@@ -148,7 +189,11 @@ public class TemporalFDCombiner {
                 for (int i = rng[0]; i <= rng[1]; i++) {
                     if (holds[i]) { found = true; break; }
                 }
-                if (!found) notDeltaDetermined++;
+                if (!found) {
+                    notDeltaDetermined++;
+                    notDeltaPerT[t]++;
+                    //if (((double) notDeltaDetermined / T) > epsilon) break;
+                }
             }
             double notDeltaShare = (double) notDeltaDetermined / (double) T;
             if (notDeltaShare <= epsilon) out.epsilonDeltaRelaxed.add(fd);
@@ -164,10 +209,40 @@ public class TemporalFDCombiner {
                 }
                 if (!found) {
                     wsum += effW[t];
-                    if (wsum > weightedEpsilon) break; // early stop
+                    //double gFD = 1.0; // @TODO replace with gpdep?
+                    weightedPerT[t] += gFD.getOrDefault(fd, 1.0);
+                    //weightedPerT[t]  += gFD;
+                    //if (wsum > weightedEpsilon) break; // early stop
                 }
             }
-            if (wsum <= weightedEpsilon) out.weightedEpsilonDeltaRelaxed.add(fd);
+            if (wsum <= weightedEpsilon) {
+                out.weightedEpsilonDeltaRelaxed.add(fd);
+            }
+
+            // ---- Q_kon scores --------------------------------------------------------
+            // Q_simple: r_t = 1 if FD does NOT hold at t; g_t = 1
+            double qSimple = 1.0 / (viol + 1.0);
+
+            // Q_delta: r_t = 1 if FD is NOT δ-determined at t; g_t = 1
+            double qDelta = 1.0 / (notDeltaDetermined + 1.0);
+
+            // Q_weighted: r_t = 1 if NOT δ-determined; g_t = normalized effW[t] in (0,1]
+            double sumWeightedViol = 0.0;
+            for (int t = 0; t < T; t++) {
+                if (holds[t]) continue;
+                int[] rng = neighborRanges.get(t);
+                boolean found = false;
+                for (int i = rng[0]; i <= rng[1]; i++) {
+                    if (holds[i]) { found = true; break; }
+                }
+                if (!found) sumWeightedViol += gWeight[t];
+            }
+            double qWeighted = 1.0 / (sumWeightedViol + 1.0);
+
+            // Store
+            out.qSimple.put(fd, qSimple);
+            out.qDelta.put(fd, qDelta);
+            out.qWeighted.put(fd, qWeighted);
 
             // Diagnostics
             out.notes.put(fd, String.format(
@@ -176,6 +251,13 @@ public class TemporalFDCombiner {
                     viol, T, violShare,
                     notDeltaDetermined, T, notDeltaShare,
                     wsum));
+        }
+
+        for (int t = 0; t < T; t++) {
+            out.timeAxis.add(timeline.get(t).timestamp);
+            out.qTimeSimple.add(1.0 / (violPerT[t] + 1.0));
+            out.qTimeDelta.add(1.0 / (notDeltaPerT[t] + 1.0));
+            out.qTimeWeighted.add(1.0 / (weightedPerT[t] + 1.0));
         }
 
         return out;

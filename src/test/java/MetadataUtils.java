@@ -1,12 +1,13 @@
+import de.metanome.algorithm_integration.AlgorithmConfigurationException;
 import de.metanome.algorithm_integration.ColumnCombination;
 import de.metanome.algorithm_integration.ColumnIdentifier;
+import de.metanome.algorithm_integration.input.FileInputGenerator;
+import de.metanome.algorithm_integration.input.InputGenerationException;
+import de.metanome.algorithm_integration.input.RelationalInput;
 import de.metanome.algorithm_integration.results.RelaxedFunctionalDependency;
 import de.metanome.algorithm_integration.results.Result;
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileReader;
-import java.io.IOException;
+import java.io.*;
 import java.util.*;
 
 public class MetadataUtils {
@@ -40,6 +41,83 @@ public class MetadataUtils {
             }
         }
         return results;
+    }
+
+    public static List<Pair<RelaxedFunctionalDependency, PdepTuple>> getPdeps(List<Result> fds, FileInputGenerator gen) {
+        Map<String, List<String>> columnData;
+        try {
+            columnData = getDataMap(gen);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+
+        List<Pair<RelaxedFunctionalDependency, PdepTuple>> results = new ArrayList<>();
+
+        for (Result fd : fds) {
+            // Only RFDs are needed for pdep/gpdep
+            if (!(fd instanceof RelaxedFunctionalDependency)) continue;
+            RelaxedFunctionalDependency rfd = (RelaxedFunctionalDependency) fd;
+
+            // Use the dependent’s table id for synthetic ColumnIdentifiers we create below
+            String tableId = rfd.getDependant().getTableIdentifier();
+
+            if (rfd.getDeterminant().getColumnIdentifiers().isEmpty()) {
+                // Create 1-ary determinants for all other columns
+                for (String columnName : columnData.keySet()) {
+                    if (columnName.equals(rfd.getDependant().getColumnIdentifier()))
+                        continue;
+                    ColumnIdentifier ci = new ColumnIdentifier(tableId, columnName);
+                    RelaxedFunctionalDependency newrfd =
+                            new RelaxedFunctionalDependency(new ColumnCombination(ci),
+                                    rfd.getDependant(), rfd.getMeasure());
+                    PdepTuple pdep = getPdep(newrfd, columnData);
+                    Pair<RelaxedFunctionalDependency, PdepTuple> pair = new Pair<>(newrfd, pdep);
+                    if (!results.contains(pair)) {
+                        results.add(pair);
+                    } else {
+                        System.out.println("Already contains " + newrfd);
+                    }
+                }
+            } else {
+                PdepTuple pdep = getPdep(rfd, columnData);
+                results.add(new Pair<>(rfd, pdep));
+            }
+        }
+        return results;
+    }
+
+
+    private static Map<String, List<String>> getDataMap(FileInputGenerator gen) throws IOException {
+        Map<String, List<String>> columnData = new HashMap<>();
+
+        try (RelationalInput ri = gen.generateNewCopy()) {
+            // Header
+            final List<String> headers = ri.columnNames();
+            final int m = ri.numberOfColumns();
+            final List<List<String>> cols = new ArrayList<>(m);
+            for (int i = 0; i < m; i++) cols.add(new ArrayList<>());
+
+            // Rows
+            while (ri.hasNext()) {
+                List<String> row = ri.next(); // may be shorter/longer than m
+                for (int c = 0; c < m; c++) {
+                    String v = (row != null && c < row.size()) ? row.get(c) : "";
+                    cols.get(c).add(v);
+                }
+            }
+
+            // Assemble map
+            for (int c = 0; c < m; c++) {
+                String colName = headers.get(c);
+                columnData.put(colName, cols.get(c));
+            }
+            return columnData;
+
+        } catch (InputGenerationException | AlgorithmConfigurationException e) {
+            throw new RuntimeException("Failed while iterating relational input", e);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     private static Map<String, List<String>> getDataMap(File[] fileNames) throws IOException {
