@@ -1,6 +1,8 @@
 package de.metanome.algorithms.hyfd.utils.multitable;
 
 import java.time.Instant;
+import java.util.Collections;
+import java.util.Map;
 import java.util.Set;
 
 public class RevisionResult {
@@ -9,11 +11,16 @@ public class RevisionResult {
     public final double weight;        // default 1.0 if you don’t use weights
     public final Set<FDKey> holds;     // FDs that HELD in this revision
 
-    public RevisionResult(String revisionId, Instant timestamp, double weight, Set<FDKey> holds) {
+    public final Map<FDKey, Double> fdWeights; // gpdep-based FD weights for this revision
+
+
+    public RevisionResult(String revisionId, Instant timestamp, double weight,
+                          Set<FDKey> holds, Map<FDKey, Double> fdWeights) {
         this.revisionId = revisionId;
         this.timestamp = timestamp;
         this.weight = weight;
         this.holds = holds;
+        this.fdWeights = (fdWeights == null) ? Collections.emptyMap() : fdWeights;
     }
 }
 

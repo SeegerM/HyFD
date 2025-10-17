@@ -119,7 +119,7 @@ public class TemporalTest {
                     Instant ts = (i < revTimes.size()) ? revTimes.get(i) : null;
                     double weight = 1.0; // or derive from time gaps, e.g., next_ts - ts
 
-                    timeline.add(new RevisionResult(rid, ts, weight, holds));
+                    timeline.add(new RevisionResult(rid, ts, weight, holds, null));
                 }
 
                 double epsilon = 0.2; // allow 10% violations
