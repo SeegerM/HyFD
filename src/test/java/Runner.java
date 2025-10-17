@@ -7,6 +7,7 @@ import de.metanome.algorithm_integration.input.RelationalInput;
 import de.metanome.algorithm_integration.input.RelationalInputGenerator;
 import de.metanome.algorithm_integration.results.RelaxedFunctionalDependency;
 import de.metanome.algorithm_integration.results.Result;
+import de.metanome.algorithms.hyfd.HyFD;
 import de.metanome.backend.input.file.DefaultFileInputGenerator;
 import de.metanome.backend.result_receiver.ResultCache;
 
