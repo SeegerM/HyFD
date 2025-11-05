@@ -32,7 +32,7 @@ public class HyFDTemporalTest {
                     .withZone(ZoneOffset.UTC);
 
     // Temporal FD parameters
-    private static final double EPSILON = 0.1;          // ε for share-based relaxations
+    private static final double EPSILON = 0.2;          // ε for share-based relaxations
     private static final boolean USE_INDEX_DELTA = true; // true: δ = #neighbor revisions; false: δ = time window
     private static final long DELTA_REVISIONS = 1;       // δ (index mode): 1 → t-1..t+1
     private static final Duration DELTA_TIME_WINDOW = Duration.ofHours(0); // (time mode)
@@ -52,7 +52,7 @@ public class HyFDTemporalTest {
             while ((jsonLine = reader.readLine()) != null) {
                 if (jsonLine.trim().isEmpty()) continue;
                 i++;
-                if (i != 93) continue;
+                if (i != 93) continue; //93
                 JsonNode root = new ObjectMapper().readTree(jsonLine);
                 String uniqueTableName = getUniqueTableName(root);
                 System.out.println("Table(" + uniqueTableName + "):");
@@ -76,6 +76,22 @@ public class HyFDTemporalTest {
 
                 // Print summary
                 printCombinedResults(combined, EPSILON, DELTA_REVISIONS, DECAY_BASE_U);
+
+                int size = timeline.size();
+                System.out.println("######################################################################");
+                for(int j = size-1; !timeline.isEmpty(); j--){
+                    TemporalFDCombiner.Combined combinedNew = TemporalFDCombiner.combine(
+                            timeline,
+                            EPSILON,
+                            USE_INDEX_DELTA,
+                            DELTA_REVISIONS,
+                            DELTA_TIME_WINDOW,
+                            WEIGHTED_EPSILON,
+                            DECAY_BASE_U
+                    );
+                    printLastConVsScope(combinedNew);
+                    timeline.remove(j);
+                }
 
                 break;
             }
@@ -276,6 +292,22 @@ public class HyFDTemporalTest {
                         String.format(Locale.ROOT, "%.3f", e.getValue()) + "]"));
     }
 
+    private static void printLastConVsScope(TemporalFDCombiner.Combined combined){
+        Set<FDKey> scope = combined.weightedEpsilonDeltaRelaxed;
+        List<ScopedTimeScore> scores = perTimestampScopedScores(combined, scope,
+                true,   // δ-aware
+                1.0,    // F1
+                1.0, 1.0); // equal FP/FN penalties
+        int i = scores.size() - 1;
+        Instant ts = combined.timeAxis.get(i);
+        ScopedTimeScore s = scores.get(i);
+        System.out.printf(Locale.ROOT,
+                "%s  prec=%.3f rec=%.3f F1=%.3f J=%.3f Qpen=%.3f Q_wlin=%.3f  [TP=%d FP=%d FN=%d |S|=%d |P|=%d]%n",
+                ts != null ? ts.toString() : ("t="+i),
+                s.precision, s.recall, s.fbeta, s.jaccard, s.qPenalized, s.qWlinScoped,
+                s.tp, s.fp, s.fn, s.sizeS, s.sizeP
+        );
+    }
     private static void printCombinedResults(TemporalFDCombiner.Combined combined,
                                              double epsilon,
                                              long deltaRevisions,
@@ -313,18 +345,33 @@ public class HyFDTemporalTest {
                         String.format(Locale.ROOT, "%.3f", e.getValue()) + "]"));
 
         System.out.println();
+        System.out.println(ANSI_RED +"=== Top by Q_wlin (1 - weighted violation share) ===" + ANSI_RESET);
+        combined.qWlin.entrySet().stream()
+                .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
+                .limit(20)
+                .forEach(e -> System.out.println(e.getKey() + "  [Q_wlin=" +
+                        String.format(Locale.ROOT, "%.3f", e.getValue()) + "]"));
+
+
+        System.out.println();
         System.out.println(ANSI_RED +"=== Overall table consistency scores ===" + ANSI_RESET);
         double qAll      = overallConsistency(combined, null, QMode.SIMPLE, false, null);
         double qAllED    = overallConsistency(combined, null, QMode.DELTA, false, null);
         double qAllW     = overallConsistency(combined, null, QMode.WEIGHTED, false, null);
         double qEpsDel   = overallConsistency(combined, combined.epsilonDeltaRelaxed, QMode.DELTA, false, null);
         double qWeighted = overallConsistency(combined, combined.weightedEpsilonDeltaRelaxed, QMode.WEIGHTED, false, null);
+        double qAllWlin  = overallConsistency(combined, null, QMode.WLIN, false, null);
+        double qWlinEDScope = overallConsistency(combined, combined.epsilonDeltaRelaxed, QMode.WLIN, false, null);
+        double qWlinWScope  = overallConsistency(combined, combined.weightedEpsilonDeltaRelaxed, QMode.WLIN, false, null);
 
         System.out.printf(Locale.ROOT, "Overall Q(table) over ALL FDs (strict)     : %.3f%n", qAll);
         System.out.printf(Locale.ROOT, "Overall Q(table) over ALL FDs (ε,δ)        : %.3f%n", qAllED);
         System.out.printf(Locale.ROOT, "Overall Q(table) over ALL FDs (weighted)   : %.3f%n", qAllW);
         System.out.printf(Locale.ROOT, "Overall Q(table) over (ε,δ)-FDs            : %.3f%n", qEpsDel);
         System.out.printf(Locale.ROOT, "Overall Q(table) over weighted (w,ε,δ)-FDs : %.3f%n", qWeighted);
+        System.out.printf(Locale.ROOT, "Overall Q(table) over ALL FDs (wlin)       : %.3f%n", qAllWlin);
+        System.out.printf(Locale.ROOT, "Overall Q(table) over (ε,δ)-FDs (wlin)      : %.3f%n", qWlinEDScope);
+        System.out.printf(Locale.ROOT, "Overall Q(table) over weighted (w,ε,δ) (wlin): %.3f%n", qWlinWScope);
 
         System.out.println();
         printPerTimestampConsistency(combined);
@@ -341,9 +388,9 @@ public class HyFDTemporalTest {
             Instant ts = combined.timeAxis.get(i);
             ScopedTimeScore s = scores.get(i);
             System.out.printf(Locale.ROOT,
-                    "%s  prec=%.3f rec=%.3f F1=%.3f J=%.3f Qpen=%.3f  [TP=%d FP=%d FN=%d |S|=%d |P|=%d]%n",
+                    "%s  prec=%.3f rec=%.3f F1=%.3f J=%.3f Qpen=%.3f Q_wlin=%.3f  [TP=%d FP=%d FN=%d |S|=%d |P|=%d]%n",
                     ts != null ? ts.toString() : ("t="+i),
-                    s.precision, s.recall, s.fbeta, s.jaccard, s.qPenalized,
+                    s.precision, s.recall, s.fbeta, s.jaccard, s.qPenalized, s.qWlinScoped,
                     s.tp, s.fp, s.fn, s.sizeS, s.sizeP
             );
         }
@@ -379,7 +426,7 @@ public class HyFDTemporalTest {
         ).trim();
     }
 
-    enum QMode { SIMPLE, DELTA, WEIGHTED }
+    enum QMode { SIMPLE, DELTA, WEIGHTED, WLIN}
 
     private static double overallConsistency(
             TemporalFDCombiner.Combined c,
@@ -392,6 +439,7 @@ public class HyFDTemporalTest {
             case SIMPLE   -> c.qSimple;
             case DELTA    -> c.qDelta;
             case WEIGHTED -> c.qWeighted;
+            case WLIN -> c.qWlin;
         };
 
         // Default scope = all FDs we have Q for
@@ -414,11 +462,12 @@ public class HyFDTemporalTest {
     }
 
     static final class ScopedTimeScore {
-        final double precision, recall, fbeta, jaccard, qPenalized;
+        final double precision, recall, fbeta, jaccard, qPenalized, qWlinScoped;
         final int tp, fp, fn, sizeS, sizeP;
-        ScopedTimeScore(double p, double r, double f, double j, double q,
+        ScopedTimeScore(double p, double r, double f, double j, double q,double qWlinScoped,
                         int tp, int fp, int fn, int sizeS, int sizeP) {
             this.precision=p; this.recall=r; this.fbeta=f; this.jaccard=j; this.qPenalized=q;
+            this.qWlinScoped = qWlinScoped;
             this.tp=tp; this.fp=fp; this.fn=fn; this.sizeS=sizeS; this.sizeP=sizeP;
         }
     }
@@ -436,6 +485,33 @@ public class HyFDTemporalTest {
         int T = c.holdsAt.size();
         List<ScopedTimeScore> out = new ArrayList<>(T);
         int sizeS = S.size();
+
+        double num = 0.0, den = 0.0;
+        Set<FDKey> combiLastWeighted = new HashSet<>();
+        combiLastWeighted.addAll(c.lastFDs);
+        combiLastWeighted.addAll(c.weightedEpsilonDeltaRelaxed);
+        for (FDKey fd : combiLastWeighted) {
+            // gpdep weight (default to 1.0 if absent or non-positive)
+            //double w = Math.max(0.0, c.gpdep.getOrDefault(fd, 1.0));
+            double w = 1.0;
+
+            // Count |ndset(fd)| over the whole timeline
+            int notDelta = 0;
+            for (int t = 0; t < T; t++) {
+                boolean holds = c.holdsAt.get(t).contains(fd);
+                if (holds) continue;
+                int[] rng = c.neighborRanges.get(t);
+                boolean found = false;
+                for (int i = rng[0]; i <= rng[1]; i++) {
+                    if (c.holdsAt.get(i).contains(fd)) { found = true; break; }
+                }
+                if (!found) notDelta++;
+            }
+            double q_fd = 1.0 - ((double) notDelta / Math.max(1, T)); // per-FD linear consistency
+            num += w * q_fd;
+            den += w;
+        }
+        double qWlinScoped = (den == 0.0) ? 1.0 : (num / den);
 
         for (int t = 0; t < T; t++) {
             // Build P_t (δ-aware if requested)
@@ -465,7 +541,7 @@ public class HyFDTemporalTest {
 
             double qPen = 1.0 / (wFP * fp + wFN * fn + 1.0);
 
-            out.add(new ScopedTimeScore(prec, rec, fbeta, jacc, qPen, tp, fp, fn, sizeS, sizeP));
+            out.add(new ScopedTimeScore(prec, rec, fbeta, jacc, qPen, qWlinScoped, tp, fp, fn, sizeS, sizeP));
         }
         return out;
     }
