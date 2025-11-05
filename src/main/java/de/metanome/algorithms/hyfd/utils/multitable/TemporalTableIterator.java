@@ -105,7 +105,6 @@ public class TemporalTableIterator implements RelationalInput {
                         rawHeaders = autoHeaders(rawHeaders.size());
                     }
 
-
                     this.columnHeaders = uniquifyHeaders(rawHeaders);
                     if (appendTimestamp)
                         this.columnHeaders.add("Time");

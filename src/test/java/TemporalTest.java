@@ -7,9 +7,6 @@ import de.metanome.algorithm_integration.input.*;
 import de.metanome.algorithm_integration.results.FunctionalDependency;
 import de.metanome.algorithm_integration.results.Result;
 import de.metanome.algorithms.hyfd.HyFD;
-import de.metanome.algorithms.hyfd.old.OldHyFD;
-import de.metanome.algorithms.hyfd.utils.InMemoryTemporalTableGenerator;
-import de.metanome.algorithms.hyfd.utils.TemporalJsonFileInputGenerator;
 import de.metanome.algorithms.hyfd.utils.TemporalTableInputGeneratorFactory;
 import de.metanome.algorithms.hyfd.utils.multitable.FDKey;
 import de.metanome.algorithms.hyfd.utils.multitable.MultiTemporalTableInputGeneratorFactory;
@@ -165,7 +162,7 @@ public class TemporalTest {
 
             ResultCache resultReceiver = new ResultCache("MetanomeMock", acceptedColumns);
 
-            OldHyFD hyFD = createHyFD(value, input, resultReceiver);
+            HyFD hyFD = createHyFD(value, input, resultReceiver);
 
             long time = System.currentTimeMillis();
             hyFD.execute();
@@ -179,8 +176,8 @@ public class TemporalTest {
         return allResults;
     }
 
-    public static OldHyFD createHyFD(double value, RelationalInputGenerator input, ResultCache resultReceiver) throws AlgorithmConfigurationException {
-        OldHyFD hyFD = new OldHyFD();
+    public static HyFD createHyFD(double value, RelationalInputGenerator input, ResultCache resultReceiver) throws AlgorithmConfigurationException {
+        HyFD hyFD = new HyFD();
         hyFD.setRelationalInputConfigurationValue(HyFD.Identifier.INPUT_GENERATOR.name(), input);
         hyFD.setStringConfigurationValue(HyFD.Identifier.THRESHOLD.name(), ""+value);//96,80
         hyFD.setIntegerConfigurationValue(HyFD.Identifier.MAX_DETERMINANT_SIZE.name(), -1);

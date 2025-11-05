@@ -24,7 +24,7 @@ public class HyFDTemporalTest {
     public static final String ANSI_RESET = "\u001B[0m";
     public static final String ANSI_RED = "\u001B[31m";
     private static final String JSONL_PATH =
-            "C:\\Users\\MarcianSeeger\\Downloads\\matchedWikitableHistories\\matchedWikitableHistories_new\\enwiki-20171103-pages-meta-history10xml-p3035575p3046511_wikitableHistories.json";
+            "data\\enwiki-20171103-pages-meta-history10xml-p3035575p3046511_wikitableHistories.json";
 
     // Timestamp parser (matches examples like: "Thu Jan 09 10:53:23 CET 2014")
     private static final DateTimeFormatter TS_FMT =
@@ -210,7 +210,7 @@ public class HyFDTemporalTest {
             // 4) Metadata
             String rid = i < meta.revIds.size() ? meta.revIds.get(i) : String.valueOf(i);
             Instant ts = i < meta.revTimes.size() ? meta.revTimes.get(i) : null;
-            double timeWeight = 1.0; // still your temporal weight
+            double timeWeight = 1.0;
 
             // 5) Add to timeline (RevisionResult extended to accept fdWeights)
             timeline.add(new RevisionResult(rid, ts, timeWeight, holds, fdWeights));
