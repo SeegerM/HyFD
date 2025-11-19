@@ -57,6 +57,8 @@ public class HyFD implements RelaxedFunctionalDependencyAlgorithm, BooleanParame
 
     private float threshold = 1.0f;
 
+    private long numberOfRecords = 0;
+
     @Override
     public String getAuthors() {
         return "Thorsten Papenbrock";
@@ -163,6 +165,10 @@ public class HyFD implements RelaxedFunctionalDependencyAlgorithm, BooleanParame
         throw new AlgorithmConfigurationException("Unknown configuration: " + identifier + " -> " + value);
     }
 
+    public long getNumberOfRecords(){
+        return numberOfRecords;
+    }
+
     @Override
     public String toString() {
         return "HyFD:\r\n\t" +
@@ -215,6 +221,7 @@ public class HyFD implements RelaxedFunctionalDependencyAlgorithm, BooleanParame
         this.closeInput(relationalInput);
 
         final int numRecords = pliBuilder.getNumLastRecords();
+        this.numberOfRecords = numRecords;
         pliBuilder = null;
 
         if (numRecords == 0) {

@@ -176,6 +176,31 @@ public class TemporalTest {
         return allResults;
     }
 
+    public static Pair<List<Result>,Long> executeHyFDRecordCount(FileInputGenerator input, double value) {
+        List<Result> allResults = new ArrayList<>();
+        long numberOfRecords = 0;
+        try {
+            List<ColumnIdentifier> acceptedColumns = getAcceptedColumns(input);
+            if (acceptedColumns.isEmpty())
+                return new Pair<>(allResults,0L);
+
+            ResultCache resultReceiver = new ResultCache("MetanomeMock", acceptedColumns);
+
+            HyFD hyFD = createHyFD(value, input, resultReceiver);
+
+            long time = System.currentTimeMillis();
+            hyFD.execute();
+            time = System.currentTimeMillis() - time;
+            numberOfRecords = hyFD.getNumberOfRecords();
+
+            List<Result> results = resultReceiver.fetchNewResults();
+            allResults.addAll(results);
+        } catch (AlgorithmExecutionException | IOException e) {
+            e.printStackTrace();
+        }
+        return new Pair<>(allResults, numberOfRecords);
+    }
+
     public static HyFD createHyFD(double value, RelationalInputGenerator input, ResultCache resultReceiver) throws AlgorithmConfigurationException {
         HyFD hyFD = new HyFD();
         hyFD.setRelationalInputConfigurationValue(HyFD.Identifier.INPUT_GENERATOR.name(), input);

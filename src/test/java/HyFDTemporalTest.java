@@ -1,7 +1,9 @@
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import de.metanome.algorithm_integration.AlgorithmConfigurationException;
 import de.metanome.algorithm_integration.ColumnIdentifier;
 import de.metanome.algorithm_integration.input.FileInputGenerator;
+import de.metanome.algorithm_integration.input.InputGenerationException;
 import de.metanome.algorithm_integration.results.FunctionalDependency;
 import de.metanome.algorithm_integration.results.RelaxedFunctionalDependency;
 import de.metanome.algorithm_integration.results.Result;
@@ -41,8 +43,8 @@ public class HyFDTemporalTest {
     private static final double PARTIAL_FACTOR = 1d;    // Partial Factor for FD discovery
 
     // Verbosity
-    private static final boolean PRINT_INTERMEDIATE_FDS = true;
-    private static final boolean USE_GPDEP = true;
+    private static final boolean PRINT_INTERMEDIATE_FDS = false;
+    private static final boolean USE_GPDEP = false;
 
     @Test
     public void wikiTableTest() throws IOException {
@@ -117,6 +119,102 @@ public class HyFDTemporalTest {
         }
     }
 
+
+    @Test
+    public void temporalMetadataTest() throws IOException {
+        String folderPathString = "C:\\Users\\MarcianSeeger\\Downloads\\matchedWikitableHistories\\matchedWikitableHistories_new";
+        String csvFile = "temporal_results.csv";
+
+        File folder = new File(folderPathString);
+        File outputFile = new File("data", csvFile);
+
+        if (outputFile.getParentFile() != null) {
+            outputFile.getParentFile().mkdirs();
+        }
+
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(outputFile))) {
+            writer.write("TableName,Rows,Attributes,Runtime,Strict,Epsilon,EpsilonDelta,Weighted");
+            writer.newLine();
+            writer.flush();
+
+            File[] fileList = folder.listFiles();
+
+            if (fileList != null) {
+                for (File file : fileList) {
+                    if (file.isFile()) {
+                        System.out.println("Processing file: " + file.getName());
+
+                        long totalLines = 0;
+                        try (BufferedReader lineCounter = new BufferedReader(new FileReader(file))) {
+                            while (lineCounter.readLine() != null) {
+                                totalLines++;
+                            }
+                        }
+                        if (totalLines == 0) {
+                            System.out.println("Skipping empty file: " + file.getName());
+                            continue;
+                        }
+
+                        long progressInterval = (long) Math.ceil(totalLines * 0.05);
+                        if (progressInterval == 0) progressInterval = 1;
+
+                        long currentLineCount = 0;
+                        try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
+                            String jsonLine;
+
+                            while ((jsonLine = reader.readLine()) != null) {
+                                currentLineCount++;
+
+                                if (currentLineCount % progressInterval == 0 || currentLineCount == totalLines) {
+                                    double percent = ((double) currentLineCount / totalLines) * 100;
+                                    System.out.printf("[%s] Progress: %.0f%% (%d/%d rows)%n",
+                                            file.getName(), percent, currentLineCount, totalLines);
+                                }
+
+                                if (jsonLine.trim().isEmpty()) continue;
+
+                                JsonNode root = new ObjectMapper().readTree(jsonLine);
+                                String uniqueTableName = getUniqueTableName(root);
+
+                                Pair<Long, TemporalFDCombiner.Combined> pair = metadata(jsonLine, root);
+                                long runtime = pair.getFirst();
+                                TemporalFDCombiner.Combined combined = pair.getSecond();
+
+                                int numStrict = combined.strict.size();
+                                int numEpsilon = combined.epsilonRelaxed.size();
+                                int numEpsilonDelta = combined.epsilonDeltaRelaxed.size();
+                                int numWeightedEpsilonDelta = combined.weightedEpsilonDeltaRelaxed.size();
+
+                                int numAttributes = HyFDTemporalTest.numAttributes / HyFDTemporalTest.numTables;
+                                long numRows = HyFDTemporalTest.numRows / HyFDTemporalTest.numTables;
+
+                                String resultLine = String.format("%s,%d,%d,%d,%d,%d,%d,%d",
+                                        uniqueTableName,
+                                        numRows,
+                                        numAttributes,
+                                        runtime,
+                                        numStrict,
+                                        numEpsilon,
+                                        numEpsilonDelta,
+                                        numWeightedEpsilonDelta
+                                );
+
+                                writer.write(resultLine);
+                                writer.newLine();
+                                writer.flush();
+                            }
+                        } catch (Exception e) {
+                            System.err.println("!!! Error processing line " + currentLineCount + " in file " + file.getName());
+                            System.err.println("Error details: " + e.getMessage());
+                        }
+                    }
+                }
+            } else {
+                System.out.println("The provided path is not a directory or is empty.");
+            }
+        }
+    }
+
     // =================
     // Helper structures
     // =================
@@ -182,7 +280,36 @@ public class HyFDTemporalTest {
         return TimeUnit.NANOSECONDS.toMillis(endNs - startNs);
     }
 
+    private static Pair<Long, TemporalFDCombiner.Combined> metadata(String jsonLine, JsonNode node) throws IOException {
+        long startNs = System.nanoTime();
+
+        RevisionMeta meta = parseRevisionMeta(node, TS_FMT);
+        // Build per-revision generators and run HyFD
+        List<RevisionResult> timeline = buildTimeline(jsonLine, meta);
+
+        // Combine according to parameters
+        TemporalFDCombiner.Combined combined = TemporalFDCombiner.combine(
+                timeline,
+                EPSILON,
+                USE_INDEX_DELTA,
+                DELTA_REVISIONS,
+                DELTA_TIME_WINDOW,
+                WEIGHTED_EPSILON,
+                DECAY_BASE_U
+        );
+
+        long endNs = System.nanoTime();
+
+        return new Pair<Long, TemporalFDCombiner.Combined>(TimeUnit.NANOSECONDS.toMillis(endNs - startNs), combined);
+    }
+
+    static int numAttributes = 0;
+    static int numRows = 0;
+    static int numTables = 0;
     private static List<RevisionResult> buildTimeline(String jsonLine, RevisionMeta meta) throws IOException {
+        HyFDTemporalTest.numAttributes = 0;
+        HyFDTemporalTest.numRows = 0;
+        HyFDTemporalTest.numTables = 0;
         MultiTemporalTableInputGeneratorFactory factory = new MultiTemporalTableInputGeneratorFactory(jsonLine);
         List<FileInputGenerator> perRevisionGenerators = factory.createGenerators();
 
@@ -191,8 +318,18 @@ public class HyFDTemporalTest {
             FileInputGenerator gen = perRevisionGenerators.get(i);
 
             // 1) Run HyFD
-            List<Result> results = TemporalTest.executeHyFD(gen, PARTIAL_FACTOR);
+            Pair<List<Result>,Long> resultpair = TemporalTest.executeHyFDRecordCount(gen, PARTIAL_FACTOR);
+            List<Result> results = resultpair.getFirst();
             if (PRINT_INTERMEDIATE_FDS) System.out.println(formatFDs(results));
+            HyFDTemporalTest.numRows += resultpair.getSecond();
+            HyFDTemporalTest.numTables++;
+            try {
+                HyFDTemporalTest.numAttributes += TemporalTest.getAcceptedColumns(gen).size();
+            } catch (InputGenerationException e) {
+                throw new RuntimeException(e);
+            } catch (AlgorithmConfigurationException e) {
+                throw new RuntimeException(e);
+            }
 
             // 2) Extract FDs that hold
             Set<FDKey> holds = FDKey.extractFDs(results);
