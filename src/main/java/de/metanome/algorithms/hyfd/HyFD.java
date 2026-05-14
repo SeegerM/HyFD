@@ -1,10 +1,6 @@
 package de.metanome.algorithms.hyfd;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.List;
+import java.util.*;
 
 import de.metanome.algorithm_integration.AlgorithmConfigurationException;
 import de.metanome.algorithm_integration.AlgorithmExecutionException;
@@ -20,11 +16,10 @@ import de.metanome.algorithm_integration.input.InputGenerationException;
 import de.metanome.algorithm_integration.input.InputIterationException;
 import de.metanome.algorithm_integration.input.RelationalInput;
 import de.metanome.algorithm_integration.input.RelationalInputGenerator;
-import de.metanome.algorithm_integration.result_receiver.FunctionalDependencyResultReceiver;
+import de.metanome.algorithm_integration.result_receiver.ColumnNameMismatchException;
+import de.metanome.algorithm_integration.result_receiver.CouldNotReceiveResultException;
 import de.metanome.algorithm_integration.result_receiver.RelaxedFunctionalDependencyResultReceiver;
-import de.metanome.algorithm_integration.results.FunctionalDependency;
 import de.metanome.algorithm_integration.results.RelaxedFunctionalDependency;
-import de.metanome.algorithms.hyfd.structures.FDList;
 import de.metanome.algorithms.hyfd.structures.FDSet;
 import de.metanome.algorithms.hyfd.structures.FDTree;
 import de.metanome.algorithms.hyfd.structures.IntegerPair;
@@ -196,12 +191,294 @@ public class HyFD implements RelaxedFunctionalDependencyAlgorithm, BooleanParame
 			throw new AlgorithmConfigurationException("No result receiver set!");
 		
 		//this.executeFDEP();
-		this.executeHyFD();
-		
+		this.executeHyFDTopDown();
+		//this.executeHyFD();
+
 		Logger.getInstance().writeln("Time: " + (System.currentTimeMillis() - startTime) + " ms");
 	}
 
 	private void executeHyFD() throws AlgorithmExecutionException {
+		// Initialize
+		Logger.getInstance().writeln("Initializing ...");
+		RelationalInput relationalInput = this.getInput();
+		this.initialize(relationalInput);
+
+		///////////////////////////////////////////////////////
+		// Build data structures for sampling and validation //
+		///////////////////////////////////////////////////////
+
+		// Calculate plis
+		Logger.getInstance().writeln("Reading data and calculating plis ...");
+		PLIBuilder pliBuilder = new PLIBuilder(this.inputRowLimit);
+		List<PositionListIndex> plis = pliBuilder.getPLIs(relationalInput, this.numAttributes, this.valueComparator.isNullEqualNull());
+		this.closeInput(relationalInput);
+
+		final int numRecords = pliBuilder.getNumLastRecords();
+		pliBuilder = null;
+
+		if (numRecords == 0) {
+			ObjectArrayList<ColumnIdentifier> columnIdentifiers = this.buildColumnIdentifiers();
+			for (int attr = 0; attr < this.numAttributes; attr++)
+				this.resultReceiver.receiveResult(new RelaxedFunctionalDependency(new ColumnCombination(), columnIdentifiers.get(attr), 1d));
+			return;
+		}
+
+		// Sort plis by number of clusters: For searching in the covers and for validation, it is good to have attributes with few non-unique values and many clusters left in the prefix tree
+		Logger.getInstance().writeln("Sorting plis by number of clusters ...");
+		Collections.sort(plis, new Comparator<PositionListIndex>() {
+			@Override
+			public int compare(PositionListIndex o1, PositionListIndex o2) {
+				int numClustersInO1 = numRecords - o1.getNumNonUniqueValues() + o1.getClusters().size();
+				int numClustersInO2 = numRecords - o2.getNumNonUniqueValues() + o2.getClusters().size();
+				return numClustersInO2 - numClustersInO1;
+			}
+		});
+
+		// Calculate inverted plis
+		Logger.getInstance().writeln("Inverting plis ...");
+		int[][] invertedPlis = this.invertPlis(plis, numRecords);
+
+		// Extract the integer representations of all records from the inverted plis
+		Logger.getInstance().writeln("Extracting integer representations for the records ...");
+		int[][] compressedRecords = new int[numRecords][];
+		for (int recordId = 0; recordId < numRecords; recordId++)
+			compressedRecords[recordId] = this.fetchRecordFrom(recordId, invertedPlis);
+		invertedPlis = null;
+
+		Logger.getInstance().writeln("Discovering best gpdep FDs ...");
+
+		int effectiveMaxLhsSize = this.maxLhsSize < 0
+				? this.numAttributes - 1
+				: this.maxLhsSize;
+
+		double minRawGpdep = 0.0;
+
+		GpdepDiscoveryBottomUpBestRhs gpdepDiscovery = new GpdepDiscoveryBottomUpBestRhs(
+				this.numAttributes,
+				numRecords,
+				compressedRecords,
+				plis,
+				this.buildColumnIdentifiers(),
+				effectiveMaxLhsSize,
+				minRawGpdep
+		);
+
+		List<GpdepDiscoveryBottomUpBestRhs.ScoredFD> gpdepResults = gpdepDiscovery.discoverParallel();
+
+		// GpdepDiscovery.normalizeGpdepInPlace(gpdepResults);
+
+		for (GpdepDiscoveryBottomUpBestRhs.ScoredFD scoredFD : gpdepResults) {
+			Logger.getInstance().writeln(scoredFD.toString());
+			this.resultReceiver.receiveResult(scoredFD.toRelaxedFunctionalDependency());
+		}
+
+		Logger.getInstance().writeln("... done! (" + gpdepResults.size() + " gpdep FDs)");
+	}
+
+	private void executeHyFDTopDown() throws AlgorithmExecutionException {
+		Logger.getInstance().writeln("Initializing ...");
+		RelationalInput relationalInput = this.getInput();
+		this.initialize(relationalInput);
+
+		Logger.getInstance().writeln("Reading data and calculating plis ...");
+		PLIBuilder pliBuilder = new PLIBuilder(this.inputRowLimit);
+		List<PositionListIndex> plis = pliBuilder.getPLIs(
+				relationalInput,
+				this.numAttributes,
+				this.valueComparator.isNullEqualNull()
+		);
+		this.closeInput(relationalInput);
+
+		final int numRecords = pliBuilder.getNumLastRecords();
+		pliBuilder = null;
+
+		ObjectArrayList<ColumnIdentifier> columnIdentifiers = this.buildColumnIdentifiers();
+
+		if (numRecords == 0) {
+			for (int attr = 0; attr < this.numAttributes; attr++) {
+				this.resultReceiver.receiveResult(
+						new RelaxedFunctionalDependency(
+								new ColumnCombination(),
+								columnIdentifiers.get(attr),
+								1d
+						)
+				);
+			}
+			return;
+		}
+
+		Logger.getInstance().writeln("Sorting plis by number of clusters ...");
+		Collections.sort(plis, new Comparator<PositionListIndex>() {
+			@Override
+			public int compare(PositionListIndex o1, PositionListIndex o2) {
+				int numClustersInO1 =
+						numRecords - o1.getNumNonUniqueValues() + o1.getClusters().size();
+				int numClustersInO2 =
+						numRecords - o2.getNumNonUniqueValues() + o2.getClusters().size();
+				return numClustersInO2 - numClustersInO1;
+			}
+		});
+
+		Logger.getInstance().writeln("Inverting plis ...");
+		int[][] invertedPlis = this.invertPlis(plis, numRecords);
+
+		Logger.getInstance().writeln("Extracting integer representations for the records ...");
+		int[][] compressedRecords = new int[numRecords][];
+		for (int recordId = 0; recordId < numRecords; recordId++) {
+			compressedRecords[recordId] = this.fetchRecordFrom(recordId, invertedPlis);
+		}
+		invertedPlis = null;
+
+		int effectiveMaxLhsSize = this.maxLhsSize < 0
+				? this.numAttributes - 1
+				: Math.min(this.maxLhsSize, this.numAttributes - 1);
+
+		//////////////////////////////////////////////////////
+		// Phase 1: Run exact HyFD validation as upper bound //
+		//////////////////////////////////////////////////////
+
+		Logger.getInstance().writeln("Discovering exact HyFD FDs as gpdep bounds ...");
+
+		FDSet negCover = new FDSet(this.numAttributes, effectiveMaxLhsSize);
+
+		FDTree posCover = new FDTree(this.numAttributes, effectiveMaxLhsSize);
+		posCover.addMostGeneralDependencies();
+
+		int maxViolations = 0;
+
+		Validator validator = new Validator(
+				negCover,
+				posCover,
+				maxViolations,
+				numRecords,
+				compressedRecords,
+				plis,
+				this.efficiencyThreshold,
+				this.validateParallel,
+				this.memoryGuardian,
+				columnIdentifiers
+		);
+
+		List<IntegerPair> comparisonSuggestions = new ArrayList<>();
+
+		do {
+			comparisonSuggestions = validator.validatePositiveCover();
+		}
+		while (comparisonSuggestions != null);
+
+		negCover = null;
+		System.out.println("HyFD done");
+		List<GpdepDiscoveryTopDownBestRhs.ExactFD> exactFds =
+				this.collectExactFdsForGpdepTopDown(posCover, plis, columnIdentifiers);
+
+		Logger.getInstance().writeln("Exact HyFD bounds: " + exactFds.size());
+
+		///////////////////////////////////////////////////
+		// Phase 2: Top-down gpdep search with pruning   //
+		///////////////////////////////////////////////////
+
+		Logger.getInstance().writeln("Discovering gpdep FDs top-down ...");
+
+		double minRawGpdep = 0.0d;
+
+		GpdepDiscoveryTopDownBestRhs gpdepDiscovery = new GpdepDiscoveryTopDownBestRhs(
+				this.numAttributes,
+				numRecords,
+				compressedRecords,
+				plis,
+				columnIdentifiers,
+				effectiveMaxLhsSize,
+				minRawGpdep,
+				exactFds
+		);
+
+
+		System.out.println("StartGPDEP Top Down");
+		List<GpdepDiscoveryTopDownBestRhs.ScoredFD> gpdepResults =
+				gpdepDiscovery.discoverParallel();
+
+		for (GpdepDiscoveryTopDownBestRhs.ScoredFD scoredFD : gpdepResults) {
+			Logger.getInstance().writeln(scoredFD.toString());
+			this.resultReceiver.receiveResult(scoredFD.toRelaxedFunctionalDependency());
+		}
+
+		Logger.getInstance().writeln(
+				"... done! (" + gpdepResults.size() + " gpdep FDs)"
+		);
+	}
+
+	private List<GpdepDiscoveryTopDownBestRhs.ExactFD> collectExactFdsForGpdepTopDown(
+			FDTree posCover,
+			final List<PositionListIndex> plis,
+			final ObjectArrayList<ColumnIdentifier> columnIdentifiers
+	) throws AlgorithmExecutionException {
+
+		final List<GpdepDiscoveryTopDownBestRhs.ExactFD> exactFds = new ArrayList<>();
+
+		RelaxedFunctionalDependencyResultReceiver collector =
+				new RelaxedFunctionalDependencyResultReceiver() {
+
+					@Override
+					public void receiveResult(RelaxedFunctionalDependency fd)
+							throws CouldNotReceiveResultException, ColumnNameMismatchException {
+
+						int rhs = sortedAttributeIndexOf(
+								fd.getDependant(),
+								plis,
+								columnIdentifiers
+						);
+
+						BitSet lhs = new BitSet(numAttributes);
+
+						for (Object obj : fd.getDeterminant().getColumnIdentifiers()) {
+							ColumnIdentifier columnIdentifier = (ColumnIdentifier) obj;
+
+							int lhsAttr = sortedAttributeIndexOf(
+									columnIdentifier,
+									plis,
+									columnIdentifiers
+							);
+
+							lhs.set(lhsAttr);
+						}
+
+						exactFds.add(new GpdepDiscoveryTopDownBestRhs.ExactFD(lhs, rhs));
+					}
+
+					@Override
+					public Boolean acceptedResult(RelaxedFunctionalDependency result) {
+						return true;
+					}
+				};
+
+		posCover.addFunctionalDependenciesInto(
+				collector,
+				columnIdentifiers,
+				plis
+		);
+
+		return exactFds;
+	}
+
+	private int sortedAttributeIndexOf(
+			ColumnIdentifier columnIdentifier,
+			List<PositionListIndex> plis,
+			ObjectArrayList<ColumnIdentifier> columnIdentifiers
+	) {
+		for (int sortedAttr = 0; sortedAttr < plis.size(); sortedAttr++) {
+			int originalAttr = plis.get(sortedAttr).getAttribute();
+
+			if (columnIdentifiers.get(originalAttr).equals(columnIdentifier)) {
+				return sortedAttr;
+			}
+		}
+
+		throw new IllegalArgumentException(
+				"Unknown column identifier: " + columnIdentifier
+		);
+	}
+
+	private void executeHyFDOld() throws AlgorithmExecutionException {
 		// Initialize
 		Logger.getInstance().writeln("Initializing ...");
 		RelationalInput relationalInput = this.getInput();
