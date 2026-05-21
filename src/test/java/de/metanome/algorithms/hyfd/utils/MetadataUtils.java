@@ -1,3 +1,5 @@
+package de.metanome.algorithms.hyfd.utils;
+
 import de.metanome.algorithm_integration.ColumnCombination;
 import de.metanome.algorithm_integration.ColumnIdentifier;
 import de.metanome.algorithm_integration.results.RelaxedFunctionalDependency;

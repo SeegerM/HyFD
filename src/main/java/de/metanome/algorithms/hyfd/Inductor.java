@@ -38,13 +38,13 @@ public class Inductor {
 		for (int i = nonFds.getFdLevels().size() - 1; i >= 0; i--) {
 			if (i >= nonFds.getFdLevels().size()) // If this level has been trimmed during iteration
 				continue;
-			
+
 			List<BitSet> nonFdLevel = nonFds.getFdLevels().get(i);
 			for (BitSet lhs : nonFdLevel) {
-				
+
 				BitSet fullRhs = (BitSet) lhs.clone();
 				fullRhs.flip(0, this.posCover.getNumAttributes());
-				
+
 				for (int rhs = fullRhs.nextSetBit(0); rhs >= 0; rhs = fullRhs.nextSetBit(rhs + 1))
 					this.specializePositiveCover(lhs, rhs, nonFds);
 			}
@@ -70,7 +70,7 @@ public class Inductor {
 						if (!this.posCover.containsFdOrGeneralization(specLhs, rhs)) {
 							this.posCover.addFunctionalDependency(specLhs, rhs);
 							newFDs++;
-							
+
 							// If dynamic memory management is enabled, frequently check the memory consumption and trim the positive cover if it does not fit anymore
 							this.memoryGuardian.memoryChanged(1);
 							this.memoryGuardian.match(this.negCover, this.posCover, nonFds);

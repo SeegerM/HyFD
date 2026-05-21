@@ -1,3 +1,5 @@
+package de.metanome.algorithms.hyfd.utils;
+
 public class Pair<F, S> {
     private F first;
     private S second;
@@ -25,7 +27,7 @@ public class Pair<F, S> {
 
     @Override
     public String toString() {
-        return "Pair{" +
+        return "de.metanome.algorithms.hyfd.utils.Pair{" +
                 "first=" + first +
                 ", second=" + second +
                 '}';

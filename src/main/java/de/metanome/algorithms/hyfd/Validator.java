@@ -47,7 +47,7 @@ public class Validator {
 		this.memoryGuardian = memoryGuardian;
 		this.maxViolations = maxViolations;
 		this.columnIdentifiers = columnIdentifiers;
-		
+
 		if (parallel) {
 			int numThreads = Runtime.getRuntime().availableProcessors();
 			this.executor = Executors.newFixedThreadPool(numThreads);
@@ -273,7 +273,7 @@ public class Validator {
 			
 			ValidationResult validationResult = (this.executor == null) ? this.validateSequential(currentLevel) : this.validateParallel(currentLevel);
 			comparisonSuggestions.addAll(validationResult.comparisonSuggestions);
-			
+
 			// If the next level exceeds the predefined maximum lhs size, then we can stop here
 			if ((this.posCover.getMaxDepth() > -1) && (this.level >= this.posCover.getMaxDepth())) {
 				int numInvalidFds = validationResult.invalidFDs.size();
@@ -370,7 +370,7 @@ public class Validator {
 		// if contains Generalization: element cannot be minimal, because generalizations have already been validated
 		if (this.posCover.containsFdOrGeneralization(childLhs, rhs))										// Pruning: If A->C, then AB->C cannot be minimal
 			return null;
-		
+
 		return childLhs;
 	}
 

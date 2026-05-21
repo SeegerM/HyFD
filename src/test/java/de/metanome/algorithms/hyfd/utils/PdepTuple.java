@@ -1,3 +1,5 @@
+package de.metanome.algorithms.hyfd.utils;
+
 public class PdepTuple {
     public double pdep;
     public double gpdep;

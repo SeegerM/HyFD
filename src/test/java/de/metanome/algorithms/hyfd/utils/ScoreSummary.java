@@ -1,3 +1,5 @@
+package de.metanome.algorithms.hyfd.utils;
+
 public class ScoreSummary {
     int tp;
     int fp;

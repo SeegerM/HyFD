@@ -226,6 +226,25 @@ public class FDTree extends FDTreeElement {
 		int nextLhsAttr = lhs.nextSetBit(0);
 		return this.containsFdOrGeneralization(lhs, rhs, nextLhsAttr);
 	}
+
+	// Saturated FD-closure of lhs under the FDs currently marked in this tree.
+	// Returns every attribute a such that some lhs' subset of (lhs ∪ already-added) has (lhs' -> a) as an FD.
+	public BitSet computeFdClosure(BitSet lhs) {
+		BitSet closure = (BitSet) lhs.clone();
+		boolean changed = true;
+		while (changed) {
+			changed = false;
+			for (int a = 0; a < this.numAttributes; a++) {
+				if (closure.get(a))
+					continue;
+				if (this.containsFdOrGeneralization(closure, a)) {
+					closure.set(a);
+					changed = true;
+				}
+			}
+		}
+		return closure;
+	}
 	
 	public BitSet getFdOrGeneralization(BitSet lhs, int rhs) {
 		BitSet foundLhs = new BitSet();

@@ -1,4 +1,4 @@
-package de.metanome.algorithms.hyfd;
+package de.metanome.algorithms.hyfd.gpdep.depracted;
 
 import de.metanome.algorithm_integration.ColumnCombination;
 import de.metanome.algorithm_integration.ColumnIdentifier;
@@ -7,13 +7,14 @@ import de.metanome.algorithms.hyfd.structures.PositionListIndex;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
 import java.util.Comparator;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -24,7 +25,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
-public class GpdepDiscoveryBottomUpBestRhs {
+public class GpdepDiscoveryTopDownBestRhs {
 
     private static final double EPS = 1e-12;
 
@@ -39,34 +40,13 @@ public class GpdepDiscoveryBottomUpBestRhs {
     private final int[][] valuesByAttr;
     private final double[] rhoByAttr;
 
+    private final Map<Integer, List<BitSet>> exactLhssByRhs;
+
     private final int numThreads;
 
     private final ConcurrentMap<BitSet, Partition> partitionCache;
 
-    private final Map<Integer, List<BitSet>> exactLhssByRhs;
-
-    public GpdepDiscoveryBottomUpBestRhs(
-            int numAttributes,
-            int numRecords,
-            int[][] compressedRecords,
-            List<PositionListIndex> plis,
-            ObjectArrayList<ColumnIdentifier> columnIdentifiers,
-            int maxLhsSize,
-            double minGpdep
-    ) {
-        this(
-                numAttributes,
-                numRecords,
-                compressedRecords,
-                plis,
-                columnIdentifiers,
-                maxLhsSize,
-                minGpdep,
-                null
-        );
-    }
-
-    public GpdepDiscoveryBottomUpBestRhs(
+    public GpdepDiscoveryTopDownBestRhs(
             int numAttributes,
             int numRecords,
             int[][] compressedRecords,
@@ -97,8 +77,8 @@ public class GpdepDiscoveryBottomUpBestRhs {
         this.rhoByAttr = precomputeRhos();
 
         this.partitionCache = new ConcurrentHashMap<>();
-
         this.exactLhssByRhs = new HashMap<>();
+
         for (int rhs = 0; rhs < numAttributes; rhs++) {
             this.exactLhssByRhs.put(rhs, new ArrayList<BitSet>());
         }
@@ -188,36 +168,70 @@ public class GpdepDiscoveryBottomUpBestRhs {
             exactMinimalLhss.add(cloneBitSet(exact));
         }
 
-        Partition rootPartition = getRootPartition();
+        Set<BitSet> visited = new HashSet<>();
 
-        List<SearchNode> currentLevel = new ArrayList<>();
-        currentLevel.add(
-                new SearchNode(
-                        new BitSet(numAttributes),
-                        rootPartition.groupIds,
-                        rootPartition.groupCount,
-                        -1
-                )
-        );
+        for (BitSet exactLhs : exactMinimalLhss) {
+            if (exactLhs.get(rhs)) {
+                continue;
+            }
 
-        while (!currentLevel.isEmpty()) {
-            List<SearchNode> nextLevel = new ArrayList<>();
+            if (exactLhs.cardinality() > maxLhsSize) {
+                continue;
+            }
 
-            for (SearchNode node : currentLevel) {
-                BitSet lhs = node.lhs;
+            Partition exactPartition = buildPartition(exactLhs);
 
-                if (lhs.get(rhs)) {
-                    continue;
-                }
+            ScoredFD scoredExact = scoreFromPartition(
+                    exactLhs,
+                    rhs,
+                    exactPartition.groupIds,
+                    exactPartition.groupCount
+            );
 
-                /*
-                 * If a proper subset of lhs is already an exact FD for this RHS,
-                 * lhs and all supersets of lhs cannot improve raw gpdep.
-                 */
-                if (containsProperSubset(lhs, exactMinimalLhss)) {
-                    continue;
-                }
+            consider(bestHolder, scoredExact);
 
+            visited.add(cloneBitSet(exactLhs));
+        }
+
+        Deque<SearchNode> stack = new ArrayDeque<>();
+
+        for (BitSet topLhs : buildTopLevelLhss(rhs)) {
+            if (visited.contains(topLhs)) {
+                continue;
+            }
+
+            Partition partition = buildPartition(topLhs);
+
+            stack.push(
+                    new SearchNode(
+                            topLhs,
+                            partition.groupIds,
+                            partition.groupCount
+                    )
+            );
+        }
+
+        while (!stack.isEmpty()) {
+            SearchNode node = stack.pop();
+            BitSet lhs = node.lhs;
+
+            if (lhs.get(rhs)) {
+                continue;
+            }
+
+            BitSet visitedKey = cloneBitSet(lhs);
+            if (!visited.add(visitedKey)) {
+                continue;
+            }
+
+            BitSet containedExactSubset =
+                    findContainedProperSubset(lhs, exactMinimalLhss);
+
+            BitSet removeCandidates;
+
+            if (containedExactSubset != null) {
+                removeCandidates = containedExactSubset;
+            } else {
                 ScoredFD scored = scoreFromPartition(
                         lhs,
                         rhs,
@@ -227,82 +241,74 @@ public class GpdepDiscoveryBottomUpBestRhs {
 
                 consider(bestHolder, scored);
 
-                /*
-                 * If lhs -> rhs is exact, no superset can have better raw gpdep.
-                 */
                 if (scored.exact) {
                     addExactMinimal(exactMinimalLhss, lhs);
-                    continue;
-                }
-
-                if (lhs.cardinality() >= maxLhsSize) {
-                    continue;
                 }
 
                 /*
-                 * Branch-and-bound:
+                 * Top-down pruning:
                  *
-                 * For every superset Z of lhs:
+                 * For every subset T of lhs:
                  *
-                 *   pdep(Z, rhs) <= 1
-                 *   epdep(Z, rhs) >= epdep(lhs, rhs)
+                 *   pdep(T, rhs) <= pdep(lhs, rhs)
+                 *   epdep(T, rhs) >= rho(rhs)
                  *
                  * Therefore:
                  *
-                 *   gpdep(Z, rhs) <= 1 - epdep(lhs, rhs)
+                 *   gpdep(T, rhs) <= pdep(lhs, rhs) - rho(rhs)
                  */
-                double upperBoundForDescendants =
-                        Math.max(1.0d - scored.epdep, 0.0d);
+                double subsetUpperBound =
+                        Math.max(scored.pdep - rhoByAttr[rhs], 0.0d);
 
-                if (bestHolder.best != null) {
-                    /*
-                     * If the branch cannot beat the current best, prune it.
-                     * Equal gpdep is also not enough because descendants have
-                     * larger LHSs and the tie-breaker prefers smaller LHSs.
-                     */
-                    if (upperBoundForDescendants <= bestHolder.best.gpdep + EPS) {
-                        continue;
-                    }
-                } else {
-                    if (upperBoundForDescendants + EPS < minGpdep) {
-                        continue;
-                    }
+                double currentBest = bestHolder.best == null
+                        ? minGpdep
+                        : Math.max(minGpdep, bestHolder.best.gpdep);
+
+                /*
+                 * Use strict pruning only.
+                 * If the upper bound ties the current best, a smaller subset
+                 * may still win by the tie-breaking rule.
+                 */
+                if (subsetUpperBound + EPS < currentBest) {
+                    continue;
                 }
 
-                for (int extensionAttr = node.lastAddedAttr + 1;
-                     extensionAttr < numAttributes;
-                     extensionAttr++) {
-
-                    if (extensionAttr == rhs) {
-                        continue;
-                    }
-
-                    BitSet childLhs = cloneBitSet(lhs);
-                    childLhs.set(extensionAttr);
-
-                    if (containsProperSubset(childLhs, exactMinimalLhss)) {
-                        continue;
-                    }
-
-                    Partition childPartition = getOrCreateChildPartition(
-                            childLhs,
-                            node.groupIds,
-                            node.groupCount,
-                            extensionAttr
-                    );
-
-                    nextLevel.add(
-                            new SearchNode(
-                                    childLhs,
-                                    childPartition.groupIds,
-                                    childPartition.groupCount,
-                                    extensionAttr
-                            )
-                    );
-                }
+                removeCandidates = lhs;
             }
 
-            currentLevel = nextLevel;
+            if (lhs.cardinality() == 0) {
+                continue;
+            }
+
+            for (int attr = removeCandidates.nextSetBit(0);
+                 attr >= 0;
+                 attr = removeCandidates.nextSetBit(attr + 1)) {
+
+                BitSet childLhs = cloneBitSet(lhs);
+                childLhs.clear(attr);
+
+                if (childLhs.get(rhs)) {
+                    continue;
+                }
+
+                if (childLhs.cardinality() > maxLhsSize) {
+                    continue;
+                }
+
+                if (visited.contains(childLhs)) {
+                    continue;
+                }
+
+                Partition childPartition = buildPartition(childLhs);
+
+                stack.push(
+                        new SearchNode(
+                                childLhs,
+                                childPartition.groupIds,
+                                childPartition.groupCount
+                        )
+                );
+            }
         }
 
         return bestHolder.best;
@@ -333,7 +339,7 @@ public class GpdepDiscoveryBottomUpBestRhs {
 
         /*
          * Tie-break 1:
-         * Prefer smaller LHS.
+         * Prefer smaller LHS, because you want minimal/simple dependencies.
          */
         if (candidate.lhsCardinality < incumbent.lhsCardinality) {
             return true;
@@ -345,7 +351,7 @@ public class GpdepDiscoveryBottomUpBestRhs {
 
         /*
          * Tie-break 2:
-         * Prefer higher observed pdep.
+         * Prefer the candidate with higher observed pdep.
          */
         if (candidate.pdep > incumbent.pdep + EPS) {
             return true;
@@ -357,7 +363,7 @@ public class GpdepDiscoveryBottomUpBestRhs {
 
         /*
          * Tie-break 3:
-         * Prefer fewer LHS groups.
+         * Prefer fewer LHS groups, because it is less specific.
          */
         if (candidate.groupCount < incumbent.groupCount) {
             return true;
@@ -369,43 +375,109 @@ public class GpdepDiscoveryBottomUpBestRhs {
 
         /*
          * Tie-break 4:
-         * Deterministic BitSet order.
+         * Deterministic lexical BitSet order.
          */
         return compareBitSets(candidate.lhs, incumbent.lhs) < 0;
     }
 
-    private Partition getRootPartition() {
-        BitSet emptyLhs = new BitSet(numAttributes);
+    private List<BitSet> buildTopLevelLhss(int rhs) {
+        List<BitSet> topLevel = new ArrayList<>();
 
-        return partitionCache.computeIfAbsent(emptyLhs, key -> {
-            int[] rootGroups = new int[numRecords];
-            Arrays.fill(rootGroups, 0);
-            return new Partition(rootGroups, 1);
+        int targetSize = Math.min(maxLhsSize, numAttributes - 1);
+
+        BitSet current = new BitSet(numAttributes);
+        buildTopLevelLhssRecursive(rhs, targetSize, 0, current, topLevel);
+
+        return topLevel;
+    }
+
+    private void buildTopLevelLhssRecursive(
+            int rhs,
+            int targetSize,
+            int startAttr,
+            BitSet current,
+            List<BitSet> result
+    ) {
+        if (current.cardinality() == targetSize) {
+            result.add(cloneBitSet(current));
+            return;
+        }
+
+        for (int attr = startAttr; attr < numAttributes; attr++) {
+            if (attr == rhs) {
+                continue;
+            }
+
+            current.set(attr);
+
+            buildTopLevelLhssRecursive(
+                    rhs,
+                    targetSize,
+                    attr + 1,
+                    current,
+                    result
+            );
+
+            current.clear(attr);
+        }
+    }
+
+    private Partition buildPartition(BitSet lhs) {
+        BitSet cacheKey = cloneBitSet(lhs);
+
+        return partitionCache.computeIfAbsent(cacheKey, key -> {
+            int[] groupIds = new int[numRecords];
+            Arrays.fill(groupIds, 0);
+
+            int groupCount = 1;
+
+            for (int attr = key.nextSetBit(0);
+                 attr >= 0;
+                 attr = key.nextSetBit(attr + 1)) {
+
+                Partition refined = refinePartition(
+                        groupIds,
+                        groupCount,
+                        attr
+                );
+
+                groupIds = refined.groupIds;
+                groupCount = refined.groupCount;
+            }
+
+            return new Partition(groupIds, groupCount);
         });
     }
 
-    private Partition getOrCreateChildPartition(
-            BitSet lhs,
+    private Partition refinePartition(
             int[] parentGroups,
             int parentGroupCount,
-            int extensionAttr
+            int attr
     ) {
-        BitSet cacheKey = cloneBitSet(lhs);
+        int[] attrValues = valuesByAttr[attr];
 
-        Partition cached = partitionCache.get(cacheKey);
-        if (cached != null) {
-            return cached;
+        int[] childGroups = new int[numRecords];
+
+        Long2IntOpenHashMap groupMap =
+                new Long2IntOpenHashMap(numRecords * 2);
+        groupMap.defaultReturnValue(-1);
+
+        int nextGroupId = 0;
+
+        for (int row = 0; row < numRecords; row++) {
+            long key = pack(parentGroups[row], attrValues[row]);
+
+            int groupId = groupMap.get(key);
+
+            if (groupId == -1) {
+                groupId = nextGroupId++;
+                groupMap.put(key, groupId);
+            }
+
+            childGroups[row] = groupId;
         }
 
-        Partition computed = refinePartition(
-                parentGroups,
-                parentGroupCount,
-                extensionAttr
-        );
-
-        Partition existing = partitionCache.putIfAbsent(cacheKey, computed);
-
-        return existing != null ? existing : computed;
+        return new Partition(childGroups, nextGroupId);
     }
 
     private ScoredFD scoreFromPartition(
@@ -432,6 +504,7 @@ public class GpdepDiscoveryBottomUpBestRhs {
         pairCounts.defaultReturnValue(0);
 
         int[] maxPerGroup = new int[groupCount];
+
         int[] rhsValues = valuesByAttr[rhs];
 
         for (int row = 0; row < numRecords; row++) {
@@ -484,37 +557,6 @@ public class GpdepDiscoveryBottomUpBestRhs {
         );
     }
 
-    private Partition refinePartition(
-            int[] parentGroups,
-            int parentGroupCount,
-            int attr
-    ) {
-        int[] attrValues = valuesByAttr[attr];
-
-        int[] childGroups = new int[numRecords];
-
-        Long2IntOpenHashMap groupMap =
-                new Long2IntOpenHashMap(numRecords * 2);
-        groupMap.defaultReturnValue(-1);
-
-        int nextGroupId = 0;
-
-        for (int row = 0; row < numRecords; row++) {
-            long key = pack(parentGroups[row], attrValues[row]);
-
-            int groupId = groupMap.get(key);
-
-            if (groupId == -1) {
-                groupId = nextGroupId++;
-                groupMap.put(key, groupId);
-            }
-
-            childGroups[row] = groupId;
-        }
-
-        return new Partition(childGroups, nextGroupId);
-    }
-
     private int[][] precomputeValueIds() {
         int[][] values = new int[numAttributes][numRecords];
 
@@ -526,8 +568,8 @@ public class GpdepDiscoveryBottomUpBestRhs {
                     values[attr][row] = clusterId;
                 } else {
                     /*
-                     * HyFD uses -1 for singleton values in stripped PLIs.
-                     * For gpdep, singleton values must stay distinct.
+                     * HyFD uses -1 for unique/singleton values.
+                     * For gpdep, singleton values must remain distinct.
                      */
                     values[attr][row] = Integer.MIN_VALUE + row;
                 }
@@ -572,6 +614,20 @@ public class GpdepDiscoveryBottomUpBestRhs {
         return sum / ((double) numRecords * (double) numRecords);
     }
 
+    private BitSet findContainedProperSubset(
+            BitSet lhs,
+            List<BitSet> candidates
+    ) {
+        for (BitSet candidate : candidates) {
+            if (candidate.cardinality() < lhs.cardinality()
+                    && isSubset(candidate, lhs)) {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
     private static void addExactMinimal(
             List<BitSet> exactMinimalLhss,
             BitSet lhs
@@ -582,31 +638,9 @@ public class GpdepDiscoveryBottomUpBestRhs {
             }
         }
 
-        Iterator<BitSet> iterator = exactMinimalLhss.iterator();
-
-        while (iterator.hasNext()) {
-            BitSet existing = iterator.next();
-
-            if (isSubset(lhs, existing)) {
-                iterator.remove();
-            }
-        }
+        exactMinimalLhss.removeIf(existing -> isSubset(lhs, existing));
 
         exactMinimalLhss.add(cloneBitSet(lhs));
-    }
-
-    private static boolean containsProperSubset(
-            BitSet lhs,
-            List<BitSet> candidates
-    ) {
-        for (BitSet candidate : candidates) {
-            if (candidate.cardinality() < lhs.cardinality()
-                    && isSubset(candidate, lhs)) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private static boolean isSubset(BitSet smaller, BitSet larger) {
@@ -646,33 +680,6 @@ public class GpdepDiscoveryBottomUpBestRhs {
         );
     }
 
-    public static void normalizeGpdepInPlace(List<ScoredFD> fds) {
-        if (fds == null || fds.isEmpty()) {
-            return;
-        }
-
-        double min = Double.MAX_VALUE;
-        double max = -Double.MAX_VALUE;
-
-        for (ScoredFD fd : fds) {
-            min = Math.min(min, fd.gpdep);
-            max = Math.max(max, fd.gpdep);
-        }
-
-        double range = max - min;
-
-        if (Math.abs(range) < EPS) {
-            for (ScoredFD fd : fds) {
-                fd.gpdep = 0.0d;
-            }
-            return;
-        }
-
-        for (ScoredFD fd : fds) {
-            fd.gpdep = (fd.gpdep - min) / range;
-        }
-    }
-
     public static class ExactFD {
         public final BitSet lhs;
         public final int rhs;
@@ -683,26 +690,15 @@ public class GpdepDiscoveryBottomUpBestRhs {
         }
     }
 
-    private static class BestHolder {
-        ScoredFD best;
-    }
-
     private static class SearchNode {
         final BitSet lhs;
         final int[] groupIds;
         final int groupCount;
-        final int lastAddedAttr;
 
-        SearchNode(
-                BitSet lhs,
-                int[] groupIds,
-                int groupCount,
-                int lastAddedAttr
-        ) {
+        SearchNode(BitSet lhs, int[] groupIds, int groupCount) {
             this.lhs = cloneBitSet(lhs);
             this.groupIds = groupIds;
             this.groupCount = groupCount;
-            this.lastAddedAttr = lastAddedAttr;
         }
     }
 
@@ -714,6 +710,10 @@ public class GpdepDiscoveryBottomUpBestRhs {
             this.groupIds = groupIds;
             this.groupCount = groupCount;
         }
+    }
+
+    private class BestHolder {
+        ScoredFD best;
     }
 
     public class ScoredFD {

@@ -1,4 +1,4 @@
-package de.metanome.algorithms.hyfd;
+package de.metanome.algorithms.hyfd.gpdep.depracted;
 
 import de.metanome.algorithm_integration.ColumnCombination;
 import de.metanome.algorithm_integration.ColumnIdentifier;
