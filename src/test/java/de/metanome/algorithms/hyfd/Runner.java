@@ -22,9 +22,10 @@ import java.util.stream.Collectors;
 
 public class Runner {
 
-    static String path = "../../../../../data/hospital/clean/";
+
+    static String path = "../data/beers/clean/";
     public static void main(String[] args) {
-        File csvFile = new File("../../../../../data/hospital/clean/clean.csv");
+        File csvFile = new File("../data/beers/clean/clean.csv");
 
         if (!csvFile.exists()) {
             throw new RuntimeException("CSV file does not exist: " + csvFile.getAbsolutePath());
@@ -34,10 +35,10 @@ public class Runner {
 
         System.out.println("Running HyFD on: " + csvFile.getAbsolutePath());
 
-        double threshold = 0.95d;
+        double threshold = 1.0d;
 
         long startTime = System.nanoTime();
-        HyFD.Mode mode = HyFD.Mode.GPDEP;
+        HyFD.Mode mode = HyFD.Mode.STANDARD;
 
         List<Result> hyfdResults = executeHyFD(mode, threshold, csvFile.getName());
 
