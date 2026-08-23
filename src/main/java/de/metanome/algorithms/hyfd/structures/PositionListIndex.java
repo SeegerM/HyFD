@@ -552,7 +552,13 @@ public class PositionListIndex {
 						 rhsAttr = refinedRhs.nextSetBit(rhsAttr + 1)) {
 						int currentRhsValue = compressedRecords[recordId][rhsAttr];
 						int repRhsValue = representative.get(rhsAttrId2Index[rhsAttr]);
-						if (currentRhsValue != repRhsValue) { //currentRhsValue != -1 &&
+						// A negative compressed value marks a value that is unique in its column, so
+						// it equals nothing -- not even another negative. That is
+						// ValueComparator.isDifferent, and the exact variant of this method
+						// applies it. Comparing the two raw ints instead counts two unique values
+						// as agreeing, so an FD whose right-hand side has no duplicate value
+						// anywhere in the table records no violations and is reported at 1.0.
+						if ((currentRhsValue < 0) || (repRhsValue < 0) || (currentRhsValue != repRhsValue)) {
 							violationCounts[rhsAttr]++;
 							if (writeViolations)
 								violationDetailsMap
@@ -630,7 +636,13 @@ public class PositionListIndex {
 					for (int rhsAttr = refinedRhs.nextSetBit(0); rhsAttr >= 0; rhsAttr = refinedRhs.nextSetBit(rhsAttr + 1)) {
 						int currentRhsValue = compressedRecords[recordId][rhsAttr];
 						int repRhsValue = representative.get(rhsAttrId2Index[rhsAttr]);
-						if (currentRhsValue != repRhsValue) { //currentRhsValue != -1 &&
+						// A negative compressed value marks a value that is unique in its column, so
+						// it equals nothing -- not even another negative. That is
+						// ValueComparator.isDifferent, and the exact variant of this method
+						// applies it. Comparing the two raw ints instead counts two unique values
+						// as agreeing, so an FD whose right-hand side has no duplicate value
+						// anywhere in the table records no violations and is reported at 1.0.
+						if ((currentRhsValue < 0) || (repRhsValue < 0) || (currentRhsValue != repRhsValue)) {
 							violationCounts[rhsAttr]++;
 							// Optionally, record a suggestion.
 							comparisonSuggestions.add(new IntegerPair(recordId, representative.getRecord()));
