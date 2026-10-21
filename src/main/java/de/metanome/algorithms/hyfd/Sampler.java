@@ -38,8 +38,15 @@ public class Sampler {
 	public FDList enrichNegativeCover(List<IntegerPair> comparisonSuggestions) {
 		int numAttributes = this.compressedRecords[0].length;
 
-		Logger.getInstance().writeln("Investigating comparison suggestions ... ");
 		FDList newNonFds = new FDList(numAttributes, this.negCover.getMaxDepth());
+
+		// For partial FDs, sampled record pairs cannot prove a non-FD: the number of violating pairs is no lower bound
+		// for the number of records that need to be removed (one deviating record can violate with many partners).
+		// Hence, the validator alone decides validity and the sampler contributes no non-FDs.
+		if (this.maxViolations > 0)
+			return newNonFds;
+
+		Logger.getInstance().writeln("Investigating comparison suggestions ... ");
 		BitSet equalAttrs = new BitSet(this.posCover.getNumAttributes());
 		HashMap<BitSetKey, Integer> map = new HashMap<>();
 		//List<BitSet> toAdd = new ArrayList<>();
@@ -81,7 +88,7 @@ public class Sampler {
 		if (this.attributeRepresentants == null) { // if this is the first call of this method
 			Logger.getInstance().write("Sorting clusters ...");
 			long time = System.currentTimeMillis();
-			ClusterComparator comparator = new ClusterComparator(this.compressedRecords, this.compressedRecords[0].length - 1, 1);
+			ClusterComparator comparator = new ClusterComparator(this.compressedRecords, this.compressedRecords[0].length - 1, 1 % this.compressedRecords[0].length); // modulo for single-column relations
 			for (PositionListIndex pli : this.plis) {
 				for (IntArrayList cluster : pli.getClusters()) {
 					Collections.sort(cluster, comparator);

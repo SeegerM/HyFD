@@ -32,7 +32,6 @@ public class Validator {
 	private float efficiencyThreshold;
 	private MemoryGuardian memoryGuardian;
 	private ExecutorService executor;
-	private final double threshold = 0.9d;
 	private int maxViolations;
 	ObjectArrayList<ColumnIdentifier> columnIdentifiers;
 	private int level = 0;
@@ -358,7 +357,7 @@ public class Validator {
 	private BitSet extendWith(BitSet lhs, int rhs, int extensionAttr) {
 		if (lhs.get(extensionAttr) || 											// Triviality: AA->C cannot be valid, because A->C is invalid
 			(rhs == extensionAttr) || 											// Triviality: AC->C cannot be valid, because A->C is invalid
-			this.posCover.containsFdOrGeneralization(lhs, extensionAttr) ||		// Pruning: If A->B, then AB->C cannot be minimal // TODO: this pruning is not used in the Inductor when inverting the negCover; so either it is useless here or it is useful in the Inductor?
+			((this.maxViolations == 0) && this.posCover.containsFdOrGeneralization(lhs, extensionAttr)) ||		// Pruning: If A->B, then AB->C cannot be minimal; only sound for exact FDs, because an approximate A->B lets AB->C have fewer violations than A->C // TODO: this pruning is not used in the Inductor when inverting the negCover; so either it is useless here or it is useful in the Inductor?
 			((this.posCover.getChildren() != null) && (this.posCover.getChildren()[extensionAttr] != null) && this.posCover.getChildren()[extensionAttr].isFd(rhs)))	
 																				// Pruning: If B->C, then AB->C cannot be minimal
 			return null;

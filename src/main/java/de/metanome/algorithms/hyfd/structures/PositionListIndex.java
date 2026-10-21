@@ -110,7 +110,7 @@ public class PositionListIndex {
 				return false;
 		}
 
-		int violationCount = numRecords - maxFrequency;
+		int violationCount = numRecords - Math.max(maxFrequency, 1); // If all values are unique (no clusters), one record can still be kept
 
 		if(writeViolations){
 			List<String> violationDetails = new ArrayList<>();
@@ -459,7 +459,7 @@ public class PositionListIndex {
 		return invalid;
 	}
 
-	private void storeViolationDetails(List<String> violationDetails, List<Integer> lhsAttr, int rhsAttr, List<String> lhs, String rhs) {
+	private static synchronized void storeViolationDetails(List<String> violationDetails, List<Integer> lhsAttr, int rhsAttr, List<String> lhs, String rhs) {
 		// Create a file in the system's temp directory.
 		File tempFile = new File(System.getProperty("java.io.tmpdir"), "violations_temp.txt");
 		try (FileWriter writer = new FileWriter(tempFile, true)) {  // Open file in append mode.
@@ -476,7 +476,7 @@ public class PositionListIndex {
 	 * Saves the list of violation details to a temporary file.
 	 * Each detail is written on a new line.
 	 */
-	private void storeViolationDetails(List<String> violationDetails, int lhsAttr, int rhsAttr, String lhs, String rhs) {
+	private static synchronized void storeViolationDetails(List<String> violationDetails, int lhsAttr, int rhsAttr, String lhs, String rhs) {
 		// Create a file in the system's temp directory.
 		File tempFile = new File(System.getProperty("java.io.tmpdir"), "violations_temp.txt");
 		try (FileWriter writer = new FileWriter(tempFile, true)) {  // Open file in append mode.
@@ -516,19 +516,7 @@ public class PositionListIndex {
 		//	System.out.println();
 
 
-		int rhsSize = rhs.cardinality();
 		BitSet refinedRhs = (BitSet) rhs.clone();
-
-		// Build mappings for the rhs attributes.
-		int[] rhsAttrId2Index = new int[compressedRecords[0].length];
-		int[] rhsAttrIndex2Id = new int[rhsSize];
-		int index = 0;
-		for (int rhsAttr = refinedRhs.nextSetBit(0); rhsAttr >= 0;
-			 rhsAttr = refinedRhs.nextSetBit(rhsAttr + 1)) {
-			rhsAttrId2Index[rhsAttr] = index;
-			rhsAttrIndex2Id[index] = rhsAttr;
-			index++;
-		}
 
 		// Counter for violations per rhs attribute.
 		int[] violationCounts = new int[compressedRecords[0].length];
@@ -538,37 +526,68 @@ public class PositionListIndex {
 		// Iterate over clusters.
 		for (IntArrayList cluster : this.clusters) {
 			// Group records by their lhs “subcluster” based on the candidate lhs attributes.
-			Object2ObjectOpenHashMap<ClusterIdentifier, ClusterIdentifierWithRecord> subClusters =
+			Object2ObjectOpenHashMap<ClusterIdentifier, IntArrayList> subClusters =
 					new Object2ObjectOpenHashMap<>(cluster.size());
 			for (int recordId : cluster) {
 				ClusterIdentifier subClusterIdentifier = this.buildClusterIdentifier(lhs, lhs.cardinality(), compressedRecords[recordId]);
 				if (subClusterIdentifier == null)
 					continue;
-				if (subClusters.containsKey(subClusterIdentifier)) {
-					ClusterIdentifierWithRecord representative = subClusters.get(subClusterIdentifier);
-					// For every rhs attribute in the candidate, update violation counts
-					// and store the corresponding recordId as a violation detail.
-					for (int rhsAttr = refinedRhs.nextSetBit(0); rhsAttr >= 0;
-						 rhsAttr = refinedRhs.nextSetBit(rhsAttr + 1)) {
-						int currentRhsValue = compressedRecords[recordId][rhsAttr];
-						int repRhsValue = representative.get(rhsAttrId2Index[rhsAttr]);
-						if (currentRhsValue != repRhsValue) { //currentRhsValue != -1 &&
+				IntArrayList subCluster = subClusters.get(subClusterIdentifier);
+				if (subCluster == null) {
+					subCluster = new IntArrayList();
+					subClusters.put(subClusterIdentifier, subCluster);
+				}
+				subCluster.add(recordId);
+			}
+
+			// g3 error: in each subcluster, every record that does not carry the most frequent rhs value is a violation.
+			// A rhs value of -1 marks a value that is unique in its column, so two -1 values are never equal.
+			Int2IntOpenHashMap frequencies = new Int2IntOpenHashMap();
+			for (IntArrayList subCluster : subClusters.values()) {
+				if (subCluster.size() < 2)
+					continue;
+				for (int rhsAttr = refinedRhs.nextSetBit(0); rhsAttr >= 0;
+					 rhsAttr = refinedRhs.nextSetBit(rhsAttr + 1)) {
+					frequencies.clear();
+					int reference = -1;
+					int maxCount = 0;
+					for (int i = 0; i < subCluster.size(); i++) {
+						int value = compressedRecords[subCluster.getInt(i)][rhsAttr];
+						if (value == -1)
+							continue;
+						int count = frequencies.addTo(value, 1) + 1;
+						if (count > maxCount) {
+							maxCount = count;
+							reference = value;
+						}
+					}
+
+					// The kept record is one with the reference value or, if all values are unique, the first record
+					int keptRecord = subCluster.getInt(0);
+					if (reference != -1) {
+						for (int i = 0; i < subCluster.size(); i++) {
+							if (compressedRecords[subCluster.getInt(i)][rhsAttr] == reference) {
+								keptRecord = subCluster.getInt(i);
+								break;
+							}
+						}
+					}
+
+					for (int i = 0; i < subCluster.size(); i++) {
+						int recordId = subCluster.getInt(i);
+						if (recordId == keptRecord)
+							continue;
+						int value = compressedRecords[recordId][rhsAttr];
+						if ((value == -1) || (value != reference)) {
 							violationCounts[rhsAttr]++;
 							if (writeViolations)
 								violationDetailsMap
 										.computeIfAbsent(rhsAttr, k -> new ArrayList<>())
 										.add(String.valueOf(recordId));
-							// Optionally, record a suggestion.
-							comparisonSuggestions.add(new IntegerPair(recordId, representative.getRecord()));
+							if (maxViolations == 0) // The sampler only uses suggestions for exact FDs (see Sampler.enrichNegativeCover)
+								comparisonSuggestions.add(new IntegerPair(recordId, keptRecord));
 						}
 					}
-				} else {
-					// First record in the subcluster becomes the representative.
-					int[] rhsValues = new int[rhsSize];
-					for (int i = 0; i < rhsSize; i++) {
-						rhsValues[i] = compressedRecords[recordId][rhsAttrIndex2Id[i]];
-					}
-					subClusters.put(subClusterIdentifier, new ClusterIdentifierWithRecord(rhsValues, recordId));
 				}
 			}
 		}

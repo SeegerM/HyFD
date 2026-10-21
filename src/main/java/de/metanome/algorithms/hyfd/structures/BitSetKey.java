@@ -26,6 +26,6 @@ public class BitSetKey {
     }
 
     public void setBitSet(BitSet equalAttrs) {
-        bytes = getBitSet().toByteArray();
+        bytes = equalAttrs.toByteArray();
     }
 }

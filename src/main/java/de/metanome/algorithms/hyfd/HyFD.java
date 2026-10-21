@@ -1,5 +1,7 @@
 package de.metanome.algorithms.hyfd;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -58,7 +60,7 @@ public class HyFD implements RelaxedFunctionalDependencyAlgorithm, BooleanParame
 	private List<String> attributeNames;
 	private int numAttributes;
 
-	private float threshold = 1.0f;
+	private BigDecimal threshold = BigDecimal.ONE;	// Minimum fraction of records that must satisfy an FD; kept as decimal to compute maxViolations without float rounding errors
 	private boolean writeViolations = false;
 
 	@Override
@@ -96,7 +98,13 @@ public class HyFD implements RelaxedFunctionalDependencyAlgorithm, BooleanParame
 		enableMemoryGuardian.setDefaultValues(defaultEnableMemoryGuardian);
 		enableMemoryGuardian.setRequired(true);
 		configs.add(enableMemoryGuardian);
-		
+
+		ConfigurationRequirementBoolean writeViolations = new ConfigurationRequirementBoolean(HyFD.Identifier.WRITE_VIOLATIONS.name());
+		Boolean[] defaultWriteViolations = { Boolean.valueOf(this.writeViolations) };
+		writeViolations.setDefaultValues(defaultWriteViolations);
+		writeViolations.setRequired(false);
+		configs.add(writeViolations);
+
 		ConfigurationRequirementInteger maxLhsSize = new ConfigurationRequirementInteger(HyFD.Identifier.MAX_DETERMINANT_SIZE.name());
 		Integer[] defaultMaxLhsSize = new Integer[1];
 		defaultMaxLhsSize[0] = new Integer(this.maxLhsSize);
@@ -122,9 +130,24 @@ public class HyFD implements RelaxedFunctionalDependencyAlgorithm, BooleanParame
 	@Override
 	public void setStringConfigurationValue(String identifier, String... values) throws AlgorithmConfigurationException {
 		if (Identifier.THRESHOLD.name().equals(identifier))
-			this.threshold = Float.parseFloat(values[0]);
+			this.threshold = parseThreshold(values);
 		else
 			this.handleUnknownConfiguration(identifier, CollectionUtils.concat(values, ","));
+	}
+
+	private static BigDecimal parseThreshold(String... values) throws AlgorithmConfigurationException {
+		if ((values.length == 0) || (values[0] == null) || values[0].trim().isEmpty())
+			return BigDecimal.ONE;
+		BigDecimal threshold;
+		try {
+			threshold = new BigDecimal(values[0].trim());
+		}
+		catch (NumberFormatException e) {
+			throw new AlgorithmConfigurationException("Threshold is not a number: " + values[0]);
+		}
+		if ((threshold.compareTo(BigDecimal.ZERO) < 0) || (threshold.compareTo(BigDecimal.ONE) > 0))
+			throw new AlgorithmConfigurationException("Threshold must be in [0, 1]: " + values[0]);
+		return threshold;
 	}
 
 	@Override
@@ -140,6 +163,8 @@ public class HyFD implements RelaxedFunctionalDependencyAlgorithm, BooleanParame
 			this.validateParallel = values[0].booleanValue();
 		else if (HyFD.Identifier.ENABLE_MEMORY_GUARDIAN.name().equals(identifier))
 			this.memoryGuardian.setActive(values[0].booleanValue());
+		else if (HyFD.Identifier.WRITE_VIOLATIONS.name().equals(identifier))
+			this.writeViolations = values[0].booleanValue();
 		else
 			this.handleUnknownConfiguration(identifier, CollectionUtils.concat(values, ","));
 	}
@@ -262,7 +287,7 @@ public class HyFD implements RelaxedFunctionalDependencyAlgorithm, BooleanParame
 		//////////////////////////
 
 		// TODO: implement parallel sampling
-		int maxViolations = (int) (numRecords - (numRecords * threshold));
+		int maxViolations = BigDecimal.valueOf(numRecords).multiply(BigDecimal.ONE.subtract(this.threshold)).setScale(0, RoundingMode.FLOOR).intValueExact();
 		Logger.getInstance().writeln("Max Violations: " + maxViolations);
 		//System.out.println(maxViolations);
 
