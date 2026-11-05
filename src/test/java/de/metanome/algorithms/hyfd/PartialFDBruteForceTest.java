@@ -13,6 +13,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.TreeMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.junit.Test;
 
@@ -23,6 +25,7 @@ import de.metanome.algorithm_integration.input.RelationalInput;
 import de.metanome.algorithm_integration.input.RelationalInputGenerator;
 import de.metanome.algorithm_integration.result_receiver.RelaxedFunctionalDependencyResultReceiver;
 import de.metanome.algorithm_integration.results.RelaxedFunctionalDependency;
+import de.metanome.algorithms.hyfd.utils.Logger;
 
 /**
  * Compares HyFD's partial FD discovery with a brute-force enumeration on many small random tables.
@@ -77,6 +80,51 @@ public class PartialFDBruteForceTest {
 	@Test
 	public void testThreshold08MaxLhsSize1() throws Exception {
 		this.compareWithBruteForce(0.8f, 1, 9);
+	}
+
+	@Test
+	public void testCertificatesThreshold09() throws Exception {
+		this.compareWithCertificates(0.9f, -1, 21);
+	}
+
+	@Test
+	public void testCertificatesThreshold08MaxLhsSize2() throws Exception {
+		this.compareWithCertificates(0.8f, 2, 22);
+	}
+
+	@Test
+	public void testCertificatesThreshold07() throws Exception {
+		this.compareWithCertificates(0.7f, -1, 23);
+	}
+
+	/**
+	 * Runs the brute-force comparison with violation certificates (prototype, see ViolationCertificates) enabled, once with the
+	 * default limits and once with tiny limits that force certificate replacements and exhausted build budgets.
+	 */
+	private void compareWithCertificates(float threshold, int maxLhsSize, long seed) throws Exception {
+		String[] tinyLimits = { "hyfd.certificates.pairs", "4", "hyfd.certificates.max", "2", "hyfd.certificates.budget", "2" };
+		for (boolean tiny : new boolean[] { false, true }) {
+			System.setProperty("hyfd.certificates", "true");
+			if (tiny)
+				for (int i = 0; i < tinyLimits.length; i += 2)
+					System.setProperty(tinyLimits[i], tinyLimits[i + 1]);
+			int logStart = Logger.getInstance().read().length();
+			try {
+				this.compareWithBruteForce(threshold, maxLhsSize, seed);
+			}
+			finally {
+				System.clearProperty("hyfd.certificates");
+				for (int i = 0; i < tinyLimits.length; i += 2)
+					System.clearProperty(tinyLimits[i]);
+			}
+
+			// Make sure that the certificates were actually used, i.e., that the comparison above tested them
+			long rejected = 0;
+			Matcher matcher = Pattern.compile("(\\d+) candidates rejected without validation").matcher(Logger.getInstance().read().substring(logStart));
+			while (matcher.find())
+				rejected += Long.parseLong(matcher.group(1));
+			assertTrue("Certificates never rejected a candidate (tiny limits: " + tiny + ")", rejected > 0);
+		}
 	}
 
 	@Test

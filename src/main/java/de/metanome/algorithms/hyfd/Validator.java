@@ -19,7 +19,9 @@ import de.metanome.algorithms.hyfd.structures.FDTreeElement;
 import de.metanome.algorithms.hyfd.structures.FDTreeElementLhsPair;
 import de.metanome.algorithms.hyfd.structures.IntegerPair;
 import de.metanome.algorithms.hyfd.structures.PositionListIndex;
+import de.metanome.algorithms.hyfd.structures.ViolationCertificates;
 import de.metanome.algorithms.hyfd.utils.Logger;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 
 public class Validator {
@@ -37,6 +39,13 @@ public class Validator {
 	private int level = 0;
 	private boolean writeViolations;
 
+	// Prototype: reusable proofs of invalid partial FDs (only for maxViolations > 0; see ViolationCertificates)
+	private ViolationCertificates certificates = null;
+	private int maxCertificatePairs = 0;
+	private IntArrayList allRecords = null;
+	private long prunedByCertificates = 0;
+	private long skippedPasses = 0;
+
 	public Validator(FDSet negCover, FDTree posCover, int maxViolations, int numRecords, int[][] compressedRecords, List<PositionListIndex> plis, float efficiencyThreshold, boolean parallel, MemoryGuardian memoryGuardian, ObjectArrayList<ColumnIdentifier> columnIdentifiers, boolean writeViolations) {
 		this.negCover = negCover;
 		this.posCover = posCover;
@@ -48,7 +57,15 @@ public class Validator {
 		this.maxViolations = maxViolations;
 		this.columnIdentifiers = columnIdentifiers;
 		this.writeViolations = writeViolations;
-		
+
+		if ((maxViolations > 0) && ViolationCertificates.isEnabled()) {
+			this.certificates = new ViolationCertificates(plis.size(), maxViolations, Integer.getInteger("hyfd.certificates.max", 64).intValue(), Integer.getInteger("hyfd.certificates.budget", 64).intValue());
+			this.maxCertificatePairs = Integer.getInteger("hyfd.certificates.pairs", 4 * (maxViolations + 1)).intValue();
+			this.allRecords = new IntArrayList(numRecords);
+			for (int recordId = 0; recordId < numRecords; recordId++)
+				this.allRecords.add(recordId);
+		}
+
 		if (parallel) {
 			int numThreads = Runtime.getRuntime().availableProcessors();
 			this.executor = Executors.newFixedThreadPool(numThreads);
@@ -69,7 +86,11 @@ public class Validator {
 		public int intersections = 0;
 		public List<FD> invalidFDs = new ArrayList<>();
 		public List<IntegerPair> comparisonSuggestions = new ArrayList<>();
+		public int prunedByCertificates = 0;
+		public int skippedPasses = 0;
 		public void add(ValidationResult other) {
+			this.prunedByCertificates += other.prunedByCertificates;
+			this.skippedPasses += other.skippedPasses;
 			this.validations += other.validations;
 			this.intersections += other.intersections;
 			this.invalidFDs.addAll(other.invalidFDs);
@@ -143,15 +164,18 @@ public class Validator {
 		// Partial Validation Call
 		public ValidationResult call() throws Exception {
 			ValidationResult result = new ValidationResult();
-			
+
 			FDTreeElement element = this.elementLhsPair.getElement();
 			BitSet lhs = this.elementLhsPair.getLhs();
 			BitSet rhs = element.getFds();
-			
+
 			int rhsSize = rhs.cardinality();
 			if (rhsSize == 0)
 				return result;
 			result.validations = result.validations + rhsSize;
+
+			ViolationCertificates certificates = Validator.this.certificates;
+			ViolationCertificates.Collector collector = (certificates == null) ? null : new ViolationCertificates.Collector(certificates, Validator.this.compressedRecords, Validator.this.maxCertificatePairs);
 			
 			if (Validator.this.level == 0) {
 				// Check if rhs is unique
@@ -161,6 +185,10 @@ public class Validator {
 					if (!Validator.this.plis.get(rhsAttr).isApproximatelyConstant(Validator.this.numRecords, Validator.this.maxViolations, violations, columnIdentifiers.get(plis.get(rhsAttr).getAttribute()).toString(), writeViolations)) {
 						element.removeFd(rhsAttr);
 						result.invalidFDs.add(new FD(lhs, rhsAttr));
+						if (collector != null) {
+							collector.collect(rhsAttr, Validator.this.allRecords);
+							certificates.addFrom(collector, rhsAttr);
+						}
 					} else {
 						element.addScore(rhsAttr, violations.get() == 0 ? 1f : 1f - ((float) violations.get() / (float) Validator.this.numRecords));
 					}
@@ -171,11 +199,19 @@ public class Validator {
 				// Check if lhs from plis refines rhs
 				int lhsAttribute = lhs.nextSetBit(0);
 				for (int rhsAttr = rhs.nextSetBit(0); rhsAttr >= 0; rhsAttr = rhs.nextSetBit(rhsAttr + 1)) {
-					//if (!Validator.this.plis.get(lhsAttribute).refinesApproximately(Validator.this.compressedRecords, rhsAttr, 0.95d, plis.get(lhsAttribute).attribute, Validator.this.numRecords)) {
-					AtomicInteger violations = new AtomicInteger(0);
-					if (!Validator.this.plis.get(lhsAttribute).refinesApproximately(Validator.this.compressedRecords, rhsAttr, violations, Validator.this.maxViolations, plis.get(rhsAttr).getAttribute(), plis.get(lhsAttribute).getAttribute(), columnIdentifiers.get(plis.get(lhsAttribute).getAttribute()).toString(), columnIdentifiers.get(plis.get(rhsAttr).attribute).toString(),writeViolations)) {
+					if ((certificates != null) && certificates.provesInvalid(lhs, rhsAttr)) {
 						element.removeFd(rhsAttr);
 						result.invalidFDs.add(new FD(lhs, rhsAttr));
+						result.prunedByCertificates++;
+						continue;
+					}
+					//if (!Validator.this.plis.get(lhsAttribute).refinesApproximately(Validator.this.compressedRecords, rhsAttr, 0.95d, plis.get(lhsAttribute).attribute, Validator.this.numRecords)) {
+					AtomicInteger violations = new AtomicInteger(0);
+					if (!Validator.this.plis.get(lhsAttribute).refinesApproximately(Validator.this.compressedRecords, rhsAttr, violations, Validator.this.maxViolations, plis.get(rhsAttr).getAttribute(), plis.get(lhsAttribute).getAttribute(), columnIdentifiers.get(plis.get(lhsAttribute).getAttribute()).toString(), columnIdentifiers.get(plis.get(rhsAttr).attribute).toString(),writeViolations, collector)) {
+						element.removeFd(rhsAttr);
+						result.invalidFDs.add(new FD(lhs, rhsAttr));
+						if (collector != null)
+							certificates.addFrom(collector, rhsAttr);
 					} else {
 						element.addScore(rhsAttr, violations.get() == 0 ? 1f : 1f - ((float) violations.get() / (float) Validator.this.numRecords));
 					}
@@ -188,11 +224,37 @@ public class Validator {
 				BitSet clone = (BitSet) lhs.clone();
 				//lhs.clear(firstLhsAttr);
 				Float[] scoreList = new Float[rhs.size()];
-				BitSet validRhs = Validator.this.plis.get(firstLhsAttr).refinesApproximately(Validator.this.compressedRecords, lhs, rhs, result.comparisonSuggestions, Validator.this.maxViolations, scoreList, Validator.this.numRecords, plis ,columnIdentifiers, clone, writeViolations);
+
+				// Candidates that a certificate proves invalid need no validation
+				BitSet toValidate = rhs;
+				if (certificates != null) {
+					toValidate = (BitSet) rhs.clone();
+					for (int rhsAttr = rhs.nextSetBit(0); rhsAttr >= 0; rhsAttr = rhs.nextSetBit(rhsAttr + 1)) {
+						if (certificates.provesInvalid(lhs, rhsAttr)) {
+							toValidate.clear(rhsAttr);
+							result.prunedByCertificates++;
+						}
+					}
+				}
+
+				BitSet validRhs;
+				if (toValidate.isEmpty()) {
+					validRhs = new BitSet(rhs.size());
+					result.skippedPasses++;
+				}
+				else {
+					validRhs = Validator.this.plis.get(firstLhsAttr).refinesApproximately(Validator.this.compressedRecords, lhs, toValidate, result.comparisonSuggestions, Validator.this.maxViolations, scoreList, Validator.this.numRecords, plis ,columnIdentifiers, clone, writeViolations, collector);
+					result.intersections++;
+				}
 				//lhs.set(firstLhsAttr);
-				
-				result.intersections++;
-				
+
+				if (collector != null) {
+					BitSet failed = (BitSet) toValidate.clone();
+					failed.andNot(validRhs);
+					for (int rhsAttr = failed.nextSetBit(0); rhsAttr >= 0; rhsAttr = failed.nextSetBit(rhsAttr + 1))
+						certificates.addFrom(collector, rhsAttr);
+				}
+
 				rhs.andNot(validRhs); // Now contains all invalid FDs
 				element.setFds(validRhs); // Sets the valid FDs in the FD tree
 				element.addScores(validRhs, scoreList);
@@ -268,12 +330,16 @@ public class Validator {
 		List<IntegerPair> comparisonSuggestions = new ArrayList<>();
 		while (!currentLevel.isEmpty()) {
 			Logger.getInstance().write("\tLevel " + this.level + ": " + currentLevel.size() + " elements; ");
+			if (this.certificates != null)
+				this.certificates.startLevel();
 			
 			// Validate current level
 			Logger.getInstance().write("(V)");
 			
 			ValidationResult validationResult = (this.executor == null) ? this.validateSequential(currentLevel) : this.validateParallel(currentLevel);
 			comparisonSuggestions.addAll(validationResult.comparisonSuggestions);
+			this.prunedByCertificates += validationResult.prunedByCertificates;
+			this.skippedPasses += validationResult.skippedPasses;
 			
 			// If the next level exceeds the predefined maximum lhs size, then we can stop here
 			if ((this.posCover.getMaxDepth() > -1) && (this.level >= this.posCover.getMaxDepth())) {
@@ -341,6 +407,9 @@ public class Validator {
 			previousNumInvalidFds = numInvalidFds;
 		}
 		
+		if (this.certificates != null)
+			Logger.getInstance().writeln(this.certificates.getStatistics() + "; " + this.prunedByCertificates + " pruned FD candidates; " + this.skippedPasses + " skipped PLI passes");
+
 		if (this.executor != null) {
 			this.executor.shutdown();
 			try {

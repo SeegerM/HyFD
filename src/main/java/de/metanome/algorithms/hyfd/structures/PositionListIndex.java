@@ -301,6 +301,12 @@ public class PositionListIndex {
 
 	public boolean refinesApproximately(int[][] compressedRecords, int rhsAttr,
 										AtomicInteger violations, int maxViolations, int rhsAttr2, int lhsAttr, String lhs, String rhs, boolean writeViolations) {
+		return this.refinesApproximately(compressedRecords, rhsAttr, violations, maxViolations, rhsAttr2, lhsAttr, lhs, rhs, writeViolations, null);
+	}
+
+	public boolean refinesApproximately(int[][] compressedRecords, int rhsAttr,
+										AtomicInteger violations, int maxViolations, int rhsAttr2, int lhsAttr, String lhs, String rhs, boolean writeViolations,
+										ViolationCertificates.Collector collector) {
 		int totalViolations = 0;
 		// List to store details about each violation.
 		List<String> violationDetails = new ArrayList<>();
@@ -310,7 +316,10 @@ public class PositionListIndex {
 
 		// Process each cluster to count violations and record details
 		for (IntArrayList cluster : this.clusters) {
-			totalViolations += countClusterInValidity2(compressedRecords, rhsAttr, cluster, lhsAttr, violationDetails,writeViolations);
+			int clusterViolations = countClusterInValidity2(compressedRecords, rhsAttr, cluster, lhsAttr, violationDetails,writeViolations);
+			totalViolations += clusterViolations;
+			if ((collector != null) && (clusterViolations > 0))
+				collector.collect(rhsAttr, cluster);
 			if (totalViolations > maxViolations)
 				return false;
 		}
@@ -503,6 +512,13 @@ public class PositionListIndex {
 	public BitSet refinesApproximately(int[][] compressedRecords, BitSet lhs, BitSet rhs,
 									   List<IntegerPair> comparisonSuggestions, int maxViolations,
 									   Float[] scoreList, int numRecords, List<PositionListIndex> plis, ObjectArrayList<ColumnIdentifier> columnIdentifiers, BitSet clone, boolean writeViolations) {
+		return this.refinesApproximately(compressedRecords, lhs, rhs, comparisonSuggestions, maxViolations, scoreList, numRecords, plis, columnIdentifiers, clone, writeViolations, null);
+	}
+
+	public BitSet refinesApproximately(int[][] compressedRecords, BitSet lhs, BitSet rhs,
+									   List<IntegerPair> comparisonSuggestions, int maxViolations,
+									   Float[] scoreList, int numRecords, List<PositionListIndex> plis, ObjectArrayList<ColumnIdentifier> columnIdentifiers, BitSet clone, boolean writeViolations,
+									   ViolationCertificates.Collector collector) {
 
 		List<Integer> lhsIndex = new ArrayList<>();
 		List<String> lhsIdentifiers = new ArrayList<>();
@@ -573,6 +589,7 @@ public class PositionListIndex {
 						}
 					}
 
+					int violationsBefore = violationCounts[rhsAttr];
 					for (int i = 0; i < subCluster.size(); i++) {
 						int recordId = subCluster.getInt(i);
 						if (recordId == keptRecord)
@@ -588,6 +605,8 @@ public class PositionListIndex {
 								comparisonSuggestions.add(new IntegerPair(recordId, keptRecord));
 						}
 					}
+					if ((collector != null) && (violationCounts[rhsAttr] > violationsBefore))
+						collector.collect(rhsAttr, subCluster, reference);
 				}
 			}
 		}
